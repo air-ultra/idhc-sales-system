@@ -105,6 +105,8 @@ const menuItems = [
   { key: 'dashboard', icon: '📊', label: 'Dashboard' },
   { key: 'staff', icon: '👥', label: 'Staff Management' },
   { key: 'payroll', icon: '💰', label: 'Payroll' },
+  { key: 'stock', icon: '📦', label: 'คลังสินค้า' },
+  { key: 'purchase', icon: '🛒', label: 'ใบสั่งซื้อ' },
   { key: 'withholding', icon: '📄', label: 'หัก ณ ที่จ่าย' },
   { key: 'users', icon: '🔐', label: 'User Management' },
 ];
@@ -953,6 +955,8 @@ export default function App() {
         {page === 'staff' && !selectedStaffId && <StaffListPage staffList={staffList} onSelect={setSelectedStaffId} onRefresh={loadStaff} />}
         {page === 'staff' && selectedStaffId && <StaffDetailPage staffId={selectedStaffId} onBack={() => setSelectedStaffId(null)} onRefresh={loadStaff} />}
         {page === 'payroll' && <PayrollPage />}
+        {page === 'stock' && <StockPage />}
+        {page === 'purchase' && <PurchaseOrderPage />}
         {page === 'withholding' && <WithholdingTaxPage />}
         {page === 'users' && <UserManagementPage staffList={staffList} />}
       </main>
@@ -1698,6 +1702,597 @@ function WithholdingTaxPage() {
             </div>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+
+/* ========== STOCK MANAGEMENT PAGE ========== */
+function StockPage() {
+  const [tab, setTab] = useState('products');
+  const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editItem, setEditItem] = useState(null);
+  const [search, setSearch] = useState('');
+  const [catFilter, setCatFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [error, setError] = useState('');
+  const [showAdjust, setShowAdjust] = useState(null);
+  const [adjustForm, setAdjustForm] = useState({ type: 'in', quantity: '', notes: '' });
+  const [viewProduct, setViewProduct] = useState(null);
+
+  const TYPE_LABELS = { service: 'บริการ', non_stock: 'ไม่นับสต็อก', stock: 'นับสต็อก' };
+  const TYPE_COLORS = { service: 'blue', non_stock: 'default', stock: 'green' };
+
+  const emptyProd = { name: '', model: '', category_id: '', product_type: 'stock', default_unit: 'ชิ้น', cost_price: '', sell_price: '', stock_qty: '', description: '', serials: [] };
+  const [prodForm, setProdForm] = useState({ ...emptyProd });
+  const [supForm, setSupForm] = useState({ name: '', contact_person: '', phone: '', email: '', address: '', tax_id: '' });
+  const [catForm, setCatForm] = useState({ name: '', code: '', description: '' });
+
+  const api = async (url, opts = {}) => {
+    const token = localStorage.getItem('token');
+    const res = await fetch(url, { ...opts, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token, ...opts.headers } });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    return res.json();
+  };
+
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      let pUrl = '/api/products?active=true';
+      if (catFilter) pUrl += '&category_id=' + catFilter;
+      if (typeFilter) pUrl += '&product_type=' + typeFilter;
+      if (search) pUrl += '&search=' + search;
+      const [p, c, s] = await Promise.all([api(pUrl), api('/api/products/categories'), api('/api/suppliers?active=true')]);
+      setProducts(p); setCategories(c); setSuppliers(s);
+    } catch (e) { setError(e.message); }
+    setLoading(false);
+  }, [catFilter, typeFilter, search]);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  const handleSaveProduct = async () => {
+    try {
+      setError('');
+      const payload = { ...prodForm, cost_price: parseFloat(prodForm.cost_price) || 0, sell_price: parseFloat(prodForm.sell_price) || 0, stock_qty: parseFloat(prodForm.stock_qty) || 0 };
+      if (editItem) await api('/api/products/' + editItem.id, { method: 'PATCH', body: JSON.stringify(payload) });
+      else await api('/api/products', { method: 'POST', body: JSON.stringify(payload) });
+      setShowForm(false); setEditItem(null); setProdForm({ ...emptyProd }); loadAll();
+    } catch (e) { setError(e.message); }
+  };
+
+  const handleSaveSupplier = async () => {
+    try {
+      setError('');
+      if (editItem) await api('/api/suppliers/' + editItem.id, { method: 'PATCH', body: JSON.stringify(supForm) });
+      else await api('/api/suppliers', { method: 'POST', body: JSON.stringify(supForm) });
+      setShowForm(false); setEditItem(null); setSupForm({ name: '', contact_person: '', phone: '', email: '', address: '', tax_id: '' }); loadAll();
+    } catch (e) { setError(e.message); }
+  };
+
+  const handleSaveCategory = async () => {
+    try {
+      setError('');
+      await api('/api/products/categories', { method: 'POST', body: JSON.stringify(catForm) });
+      setShowForm(false); setCatForm({ name: '', code: '', description: '' }); loadAll();
+    } catch (e) { setError(e.message); }
+  };
+
+  const handleAdjustStock = async () => {
+    try {
+      setError('');
+      await api('/api/products/' + showAdjust.id + '/adjust-stock', { method: 'POST', body: JSON.stringify({ type: adjustForm.type, quantity: parseFloat(adjustForm.quantity), notes: adjustForm.notes }) });
+      setShowAdjust(null); setAdjustForm({ type: 'in', quantity: '', notes: '' }); loadAll();
+    } catch (e) { setError(e.message); }
+  };
+
+  const handleViewProduct = async (id) => {
+    try { const d = await api('/api/products/' + id); setViewProduct(d); } catch (e) { setError(e.message); }
+  };
+
+  const handleAddSerial = async () => {
+    if (!viewProduct) return;
+    const sn = prompt('Serial Number:');
+    if (!sn) return;
+    const mac = prompt('MAC Address (ถ้ามี):') || '';
+    try {
+      await api('/api/products/' + viewProduct.id + '/serials', { method: 'POST', body: JSON.stringify({ serial_no: sn, mac_address: mac }) });
+      handleViewProduct(viewProduct.id);
+    } catch (e) { setError(e.message); }
+  };
+
+  const handleDeleteSerial = async (serialId) => {
+    if (!confirm('ลบ serial นี้?')) return;
+    try {
+      await api('/api/products/' + viewProduct.id + '/serials/' + serialId, { method: 'DELETE' });
+      handleViewProduct(viewProduct.id);
+    } catch (e) { setError(e.message); }
+  };
+
+  const openEditProduct = (p) => { setProdForm({ name: p.name, model: p.model || '', category_id: p.category_id || '', product_type: p.product_type || 'stock', default_unit: p.default_unit, cost_price: p.cost_price, sell_price: p.sell_price, stock_qty: p.stock_qty, description: p.description || '', serials: [] }); setEditItem(p); setTab('products'); setShowForm(true); };
+  const openEditSupplier = (s) => { setSupForm({ name: s.name, contact_person: s.contact_person || '', phone: s.phone || '', email: s.email || '', address: s.address || '', tax_id: s.tax_id || '' }); setEditItem(s); setTab('suppliers'); setShowForm(true); };
+
+  const fmtNum = (v) => parseFloat(v || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 });
+
+  return (
+    <div>
+      <div style={styles.pageHeader}>
+        <h1 style={styles.pageTitle}>คลังสินค้า / Stock Management</h1>
+        <button style={styles.btn('primary')} onClick={() => { setEditItem(null); setProdForm({...emptyProd}); setSupForm({ name: '', contact_person: '', phone: '', email: '', address: '', tax_id: '' }); setCatForm({ name: '', code: '', description: '' }); setShowForm(true); }}>
+          {tab === 'products' ? '+ เพิ่มสินค้า' : tab === 'suppliers' ? '+ เพิ่มผู้จำหน่าย' : '+ เพิ่มหมวดหมู่'}
+        </button>
+      </div>
+
+      {error && <div style={styles.error}>{error} <span style={{ cursor: 'pointer', float: 'right' }} onClick={() => setError('')}>✕</span></div>}
+
+      <div style={styles.card}>
+        <div style={styles.tabs}>
+          <button style={styles.tab(tab === 'products')} onClick={() => setTab('products')}>📦 สินค้า ({products.length})</button>
+          <button style={styles.tab(tab === 'suppliers')} onClick={() => setTab('suppliers')}>🏭 ผู้จำหน่าย ({suppliers.length})</button>
+          <button style={styles.tab(tab === 'categories')} onClick={() => setTab('categories')}>📂 หมวดหมู่ ({categories.length})</button>
+        </div>
+
+        {tab === 'products' && (
+          <div>
+            <div style={{ padding: '16px 16px 0', display: 'flex', gap: 10 }}>
+              <input style={{ ...styles.input, flex: 1 }} placeholder="ค้นหาสินค้า / model..." value={search} onChange={e => setSearch(e.target.value)} />
+              <select style={{ ...styles.input, width: 150 }} value={typeFilter} onChange={e => setTypeFilter(e.target.value)}>
+                <option value="">ทุกประเภท</option>
+                <option value="service">บริการ</option>
+                <option value="non_stock">ไม่นับสต็อก</option>
+                <option value="stock">นับสต็อก</option>
+              </select>
+              <select style={{ ...styles.input, width: 150 }} value={catFilter} onChange={e => setCatFilter(e.target.value)}>
+                <option value="">ทุกหมวด</option>
+                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div style={{ padding: 16 }}>
+              {loading ? <div style={{ textAlign: 'center', color: '#888', padding: 40 }}>กำลังโหลด...</div> : (
+                <table style={styles.table}>
+                  <thead><tr>
+                    <th style={styles.th}>รหัส</th><th style={styles.th}>Model</th><th style={styles.th}>ชื่อสินค้า</th><th style={styles.th}>ประเภท</th>
+                    <th style={styles.th}>หมวด</th><th style={styles.th}>หน่วย</th><th style={styles.th}>ราคาทุน</th><th style={styles.th}>ราคาขาย</th>
+                    <th style={styles.th}>คงเหลือ</th><th style={styles.th}>จัดการ</th>
+                  </tr></thead>
+                  <tbody>
+                    {products.length === 0 ? <tr><td colSpan={10} style={{ ...styles.td, textAlign: 'center', color: '#aaa' }}>ไม่มีข้อมูล</td></tr> :
+                    products.map(p => (
+                      <tr key={p.id}>
+                        <td style={styles.td}><span style={{ fontWeight: 600, color: '#1e3a5f', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => handleViewProduct(p.id)}>{p.product_code}</span></td>
+                        <td style={styles.td}>{p.model || '-'}</td>
+                        <td style={styles.td}>{p.name}</td>
+                        <td style={styles.td}><span style={styles.badge(TYPE_COLORS[p.product_type])}>{TYPE_LABELS[p.product_type] || p.product_type}</span></td>
+                        <td style={styles.td}>{p.category_name || '-'}</td>
+                        <td style={styles.td}>{p.default_unit}</td>
+                        <td style={{ ...styles.td, textAlign: 'right' }}>{fmtNum(p.cost_price)}</td>
+                        <td style={{ ...styles.td, textAlign: 'right' }}>{fmtNum(p.sell_price)}</td>
+                        <td style={{ ...styles.td, textAlign: 'right', fontWeight: 700, color: p.product_type === 'stock' ? (parseFloat(p.stock_qty) <= 0 ? '#dc2626' : '#1e3a5f') : '#888' }}>
+                          {p.product_type === 'stock' ? fmtNum(p.stock_qty) : '-'}
+                        </td>
+                        <td style={styles.td}>
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <button style={{ ...styles.btn('default'), fontSize: 12, padding: '4px 10px' }} onClick={() => openEditProduct(p)}>แก้ไข</button>
+                            {p.product_type === 'stock' && <button style={{ ...styles.btn('success'), fontSize: 12, padding: '4px 10px' }} onClick={() => { setShowAdjust(p); setAdjustForm({ type: 'in', quantity: '', notes: '' }); }}>ปรับ stock</button>}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        )}
+
+        {tab === 'suppliers' && (
+          <div style={{ padding: 16 }}>
+            <table style={styles.table}>
+              <thead><tr>
+                <th style={styles.th}>รหัส</th><th style={styles.th}>ชื่อ</th><th style={styles.th}>ผู้ติดต่อ</th>
+                <th style={styles.th}>โทร</th><th style={styles.th}>Email</th><th style={styles.th}>เลขภาษี</th><th style={styles.th}>จัดการ</th>
+              </tr></thead>
+              <tbody>
+                {suppliers.length === 0 ? <tr><td colSpan={7} style={{ ...styles.td, textAlign: 'center', color: '#aaa' }}>ไม่มีข้อมูล</td></tr> :
+                suppliers.map(s => (
+                  <tr key={s.id}>
+                    <td style={styles.td}><span style={{ fontWeight: 600, color: '#1e3a5f' }}>{s.code}</span></td>
+                    <td style={styles.td}>{s.name}</td>
+                    <td style={styles.td}>{s.contact_person || '-'}</td>
+                    <td style={styles.td}>{s.phone || '-'}</td>
+                    <td style={styles.td}>{s.email || '-'}</td>
+                    <td style={styles.td}>{s.tax_id || '-'}</td>
+                    <td style={styles.td}><button style={{ ...styles.btn('default'), fontSize: 12, padding: '4px 10px' }} onClick={() => openEditSupplier(s)}>แก้ไข</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {tab === 'categories' && (
+          <div style={{ padding: 16 }}>
+            <table style={styles.table}>
+              <thead><tr><th style={styles.th}>รหัส</th><th style={styles.th}>ชื่อหมวดหมู่</th><th style={styles.th}>คำอธิบาย</th></tr></thead>
+              <tbody>
+                {categories.map(c => (
+                  <tr key={c.id}><td style={styles.td}>{c.code}</td><td style={styles.td}>{c.name}</td><td style={styles.td}>{c.description || '-'}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* PRODUCT FORM MODAL */}
+      {showForm && tab === 'products' && (
+        <div style={styles.overlay} onClick={() => setShowForm(false)}><div style={{ ...styles.modal, width: 620 }} onClick={e => e.stopPropagation()}>
+          <div style={styles.modalHeader}><span style={styles.modalTitle}>{editItem ? 'แก้ไขสินค้า' : 'เพิ่มสินค้า'}</span><button onClick={() => setShowForm(false)} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button></div>
+          <div style={styles.modalBody}>
+            <div style={styles.formGrid}>
+              <div><label style={styles.label}>ชื่อสินค้า *</label><input style={styles.input} value={prodForm.name} onChange={e => setProdForm(f => ({ ...f, name: e.target.value }))} /></div>
+              <div><label style={styles.label}>Model</label><input style={styles.input} value={prodForm.model} onChange={e => setProdForm(f => ({ ...f, model: e.target.value }))} /></div>
+              <div><label style={styles.label}>ประเภทสินค้า *</label>
+                <select style={styles.input} value={prodForm.product_type} onChange={e => setProdForm(f => ({ ...f, product_type: e.target.value }))}>
+                  <option value="stock">สินค้านับสต็อก</option>
+                  <option value="non_stock">สินค้าไม่นับสต็อก</option>
+                  <option value="service">บริการ</option>
+                </select>
+              </div>
+              <div><label style={styles.label}>หมวดหมู่</label><select style={styles.input} value={prodForm.category_id} onChange={e => setProdForm(f => ({ ...f, category_id: e.target.value }))}><option value="">-- เลือก --</option>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+              <div><label style={styles.label}>หน่วย</label><input style={styles.input} value={prodForm.default_unit} onChange={e => setProdForm(f => ({ ...f, default_unit: e.target.value }))} /></div>
+              <div><label style={styles.label}>ราคาทุน</label><input type="number" style={styles.input} value={prodForm.cost_price} onChange={e => setProdForm(f => ({ ...f, cost_price: e.target.value }))} /></div>
+              <div><label style={styles.label}>ราคาขาย</label><input type="number" style={styles.input} value={prodForm.sell_price} onChange={e => setProdForm(f => ({ ...f, sell_price: e.target.value }))} /></div>
+              {!editItem && prodForm.product_type === 'stock' && <div><label style={styles.label}>จำนวนเริ่มต้น</label><input type="number" style={styles.input} value={prodForm.stock_qty} onChange={e => setProdForm(f => ({ ...f, stock_qty: e.target.value }))} /></div>}
+              <div style={{ gridColumn: '1/-1' }}><label style={styles.label}>รายละเอียด</label><textarea style={{ ...styles.input, height: 60 }} value={prodForm.description} onChange={e => setProdForm(f => ({ ...f, description: e.target.value }))} /></div>
+            </div>
+          </div>
+          <div style={styles.modalFooter}><button style={styles.btn('default')} onClick={() => setShowForm(false)}>ยกเลิก</button><button style={styles.btn('primary')} onClick={handleSaveProduct}>{editItem ? 'บันทึก' : 'เพิ่มสินค้า'}</button></div>
+        </div></div>
+      )}
+
+      {/* SUPPLIER FORM MODAL */}
+      {showForm && tab === 'suppliers' && (
+        <div style={styles.overlay} onClick={() => setShowForm(false)}><div style={styles.modal} onClick={e => e.stopPropagation()}>
+          <div style={styles.modalHeader}><span style={styles.modalTitle}>{editItem ? 'แก้ไขผู้จำหน่าย' : 'เพิ่มผู้จำหน่าย'}</span><button onClick={() => setShowForm(false)} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button></div>
+          <div style={styles.modalBody}>
+            <div style={styles.formGrid}>
+              <div><label style={styles.label}>ชื่อ *</label><input style={styles.input} value={supForm.name} onChange={e => setSupForm(f => ({ ...f, name: e.target.value }))} /></div>
+              <div><label style={styles.label}>ผู้ติดต่อ</label><input style={styles.input} value={supForm.contact_person} onChange={e => setSupForm(f => ({ ...f, contact_person: e.target.value }))} /></div>
+              <div><label style={styles.label}>โทร</label><input style={styles.input} value={supForm.phone} onChange={e => setSupForm(f => ({ ...f, phone: e.target.value }))} /></div>
+              <div><label style={styles.label}>Email</label><input style={styles.input} value={supForm.email} onChange={e => setSupForm(f => ({ ...f, email: e.target.value }))} /></div>
+              <div><label style={styles.label}>เลขภาษี</label><input style={styles.input} value={supForm.tax_id} onChange={e => setSupForm(f => ({ ...f, tax_id: e.target.value }))} /></div>
+              <div style={{ gridColumn: '1/-1' }}><label style={styles.label}>ที่อยู่</label><textarea style={{ ...styles.input, height: 60 }} value={supForm.address} onChange={e => setSupForm(f => ({ ...f, address: e.target.value }))} /></div>
+            </div>
+          </div>
+          <div style={styles.modalFooter}><button style={styles.btn('default')} onClick={() => setShowForm(false)}>ยกเลิก</button><button style={styles.btn('primary')} onClick={handleSaveSupplier}>{editItem ? 'บันทึก' : 'เพิ่มผู้จำหน่าย'}</button></div>
+        </div></div>
+      )}
+
+      {/* CATEGORY FORM MODAL */}
+      {showForm && tab === 'categories' && (
+        <div style={styles.overlay} onClick={() => setShowForm(false)}><div style={{ ...styles.modal, width: 400 }} onClick={e => e.stopPropagation()}>
+          <div style={styles.modalHeader}><span style={styles.modalTitle}>เพิ่มหมวดหมู่</span><button onClick={() => setShowForm(false)} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button></div>
+          <div style={styles.modalBody}>
+            <div style={styles.inputGroup}><label style={styles.label}>ชื่อ *</label><input style={styles.input} value={catForm.name} onChange={e => setCatForm(f => ({ ...f, name: e.target.value }))} /></div>
+            <div style={styles.inputGroup}><label style={styles.label}>รหัส *</label><input style={styles.input} value={catForm.code} onChange={e => setCatForm(f => ({ ...f, code: e.target.value }))} placeholder="เช่น IT, OFFICE" /></div>
+            <div style={styles.inputGroup}><label style={styles.label}>คำอธิบาย</label><input style={styles.input} value={catForm.description} onChange={e => setCatForm(f => ({ ...f, description: e.target.value }))} /></div>
+          </div>
+          <div style={styles.modalFooter}><button style={styles.btn('default')} onClick={() => setShowForm(false)}>ยกเลิก</button><button style={styles.btn('primary')} onClick={handleSaveCategory}>เพิ่ม</button></div>
+        </div></div>
+      )}
+
+      {/* ADJUST STOCK MODAL */}
+      {showAdjust && (
+        <div style={styles.overlay} onClick={() => setShowAdjust(null)}><div style={{ ...styles.modal, width: 420 }} onClick={e => e.stopPropagation()}>
+          <div style={styles.modalHeader}><span style={styles.modalTitle}>ปรับ stock: {showAdjust.name}</span><button onClick={() => setShowAdjust(null)} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button></div>
+          <div style={styles.modalBody}>
+            <div style={{ textAlign: 'center', marginBottom: 16 }}><span style={{ fontSize: 13, color: '#888' }}>คงเหลือปัจจุบัน:</span> <span style={{ fontSize: 20, fontWeight: 700, color: '#1e3a5f' }}>{fmtNum(showAdjust.stock_qty)}</span> <span style={{ color: '#888' }}>{showAdjust.default_unit}</span></div>
+            <div style={styles.formGrid}>
+              <div><label style={styles.label}>ประเภท</label><select style={styles.input} value={adjustForm.type} onChange={e => setAdjustForm(f => ({ ...f, type: e.target.value }))}><option value="in">รับเข้า (+)</option><option value="out">เบิกออก (-)</option></select></div>
+              <div><label style={styles.label}>จำนวน *</label><input type="number" style={styles.input} value={adjustForm.quantity} onChange={e => setAdjustForm(f => ({ ...f, quantity: e.target.value }))} /></div>
+              <div style={{ gridColumn: '1/-1' }}><label style={styles.label}>หมายเหตุ</label><input style={styles.input} value={adjustForm.notes} onChange={e => setAdjustForm(f => ({ ...f, notes: e.target.value }))} /></div>
+            </div>
+          </div>
+          <div style={styles.modalFooter}><button style={styles.btn('default')} onClick={() => setShowAdjust(null)}>ยกเลิก</button><button style={styles.btn('success')} onClick={handleAdjustStock}>ปรับ stock</button></div>
+        </div></div>
+      )}
+
+      {/* VIEW PRODUCT DETAIL MODAL */}
+      {viewProduct && (
+        <div style={styles.overlay} onClick={() => setViewProduct(null)}><div style={{ ...styles.modal, width: 700 }} onClick={e => e.stopPropagation()}>
+          <div style={styles.modalHeader}>
+            <span style={styles.modalTitle}>{viewProduct.product_code} — {viewProduct.name} <span style={styles.badge(TYPE_COLORS[viewProduct.product_type])}>{TYPE_LABELS[viewProduct.product_type]}</span></span>
+            <button onClick={() => setViewProduct(null)} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button>
+          </div>
+          <div style={styles.modalBody}>
+            <div style={styles.formGrid}>
+              <div><div style={styles.fieldLabel}>Model</div><div style={styles.fieldValue}>{viewProduct.model || '-'}</div></div>
+              <div><div style={styles.fieldLabel}>หมวด</div><div style={styles.fieldValue}>{viewProduct.category_name || '-'}</div></div>
+              <div><div style={styles.fieldLabel}>ราคาทุน</div><div style={styles.fieldValue}>{fmtNum(viewProduct.cost_price)}</div></div>
+              <div><div style={styles.fieldLabel}>ราคาขาย</div><div style={styles.fieldValue}>{fmtNum(viewProduct.sell_price)}</div></div>
+              {viewProduct.product_type === 'stock' && <div><div style={styles.fieldLabel}>คงเหลือ</div><div style={{ ...styles.fieldValue, fontWeight: 700, color: '#1e3a5f', fontSize: 18 }}>{fmtNum(viewProduct.stock_qty)} {viewProduct.default_unit}</div></div>}
+              {viewProduct.description && <div style={{ gridColumn: '1/-1' }}><div style={styles.fieldLabel}>รายละเอียด</div><div style={styles.fieldValue}>{viewProduct.description}</div></div>}
+            </div>
+
+            {/* SERIALS (stock type only) */}
+            {viewProduct.product_type === 'stock' && (
+              <div style={{ marginTop: 20 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700 }}>Serial / MAC Address ({(viewProduct.serials || []).length})</span>
+                  <button style={{ ...styles.btn('primary'), fontSize: 12, padding: '4px 12px' }} onClick={handleAddSerial}>+ เพิ่ม Serial</button>
+                </div>
+                {(viewProduct.serials || []).length === 0 ? (
+                  <div style={{ textAlign: 'center', color: '#aaa', padding: 16, fontSize: 13 }}>ยังไม่มี serial number</div>
+                ) : (
+                  <table style={styles.table}>
+                    <thead><tr><th style={styles.th}>Serial No.</th><th style={styles.th}>MAC Address</th><th style={styles.th}>สถานะ</th><th style={styles.th}>จัดการ</th></tr></thead>
+                    <tbody>
+                      {(viewProduct.serials || []).map(s => (
+                        <tr key={s.id}>
+                          <td style={styles.td}>{s.serial_no || '-'}</td>
+                          <td style={styles.td}>{s.mac_address || '-'}</td>
+                          <td style={styles.td}><span style={styles.badge(s.status === 'available' ? 'green' : 'default')}>{s.status}</span></td>
+                          <td style={styles.td}><button style={{ ...styles.btn('danger'), fontSize: 11, padding: '2px 8px' }} onClick={() => handleDeleteSerial(s.id)}>ลบ</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+
+            {/* MOVEMENTS */}
+            {viewProduct.product_type === 'stock' && (viewProduct.movements || []).length > 0 && (
+              <div style={{ marginTop: 20 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>ประวัติเคลื่อนไหว stock</div>
+                <table style={styles.table}>
+                  <thead><tr><th style={styles.th}>วันที่</th><th style={styles.th}>ประเภท</th><th style={styles.th}>จำนวน</th><th style={styles.th}>ก่อน</th><th style={styles.th}>หลัง</th><th style={styles.th}>อ้างอิง</th><th style={styles.th}>หมายเหตุ</th></tr></thead>
+                  <tbody>
+                    {(viewProduct.movements || []).map(m => (
+                      <tr key={m.id}>
+                        <td style={styles.td}>{new Date(m.created_at).toLocaleString('th-TH')}</td>
+                        <td style={styles.td}><span style={styles.badge(m.movement_type === 'in' ? 'green' : 'red')}>{m.movement_type === 'in' ? 'รับเข้า' : 'เบิกออก'}</span></td>
+                        <td style={{ ...styles.td, textAlign: 'right' }}>{fmtNum(m.quantity)}</td>
+                        <td style={{ ...styles.td, textAlign: 'right' }}>{fmtNum(m.before_qty)}</td>
+                        <td style={{ ...styles.td, textAlign: 'right', fontWeight: 700 }}>{fmtNum(m.after_qty)}</td>
+                        <td style={styles.td}>{m.reference_type || '-'}</td>
+                        <td style={styles.td}>{m.notes || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div></div>
+      )}
+    </div>
+  );
+}
+
+/* ========== PURCHASE ORDER PAGE ========== */
+function PurchaseOrderPage() {
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [error, setError] = useState('');
+  const [suppliers, setSuppliers] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [filterStatus, setFilterStatus] = useState('');
+  const [viewPO, setViewPO] = useState(null);
+
+  const ST_LABEL = { draft: 'ร่าง', approved: 'อนุมัติแล้ว', received: 'รับสินค้าแล้ว', cancelled: 'ยกเลิก' };
+  const ST_COLOR = { draft: 'default', approved: 'blue', received: 'green', cancelled: 'red' };
+
+  const [form, setForm] = useState(getEmptyPOForm());
+  function getEmptyPOForm() {
+    return { supplier_id: '', po_date: new Date().toISOString().split('T')[0], expected_date: '', vat_rate: 7, notes: '',
+      items: [{ product_id: '', unit: 'ชิ้น', quantity: '', unit_price: '' }] };
+  }
+
+  const api = async (url, opts = {}) => {
+    const token = localStorage.getItem('token');
+    const res = await fetch(url, { ...opts, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token, ...opts.headers } });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || res.statusText); }
+    return res.json();
+  };
+
+  const loadAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      let url = '/api/purchase-orders';
+      if (filterStatus) url += '?status=' + filterStatus;
+      const [po, sup, prod] = await Promise.all([api(url), api('/api/suppliers?active=true'), api('/api/products?active=true')]);
+      setList(po); setSuppliers(sup); setProducts(prod);
+    } catch (e) { setError(e.message); }
+    setLoading(false);
+  }, [filterStatus]);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  const calcTotal = (items) => items.reduce((s, i) => s + (parseFloat(i.quantity) || 0) * (parseFloat(i.unit_price) || 0), 0);
+
+  const handleSubmit = async () => {
+    try {
+      setError('');
+      if (!form.supplier_id) return setError('เลือกผู้จำหน่าย');
+      const payload = { ...form, items: form.items.filter(i => i.product_id).map(i => ({ ...i, quantity: parseFloat(i.quantity) || 0, unit_price: parseFloat(i.unit_price) || 0 })) };
+      if (editId) await api('/api/purchase-orders/' + editId, { method: 'PATCH', body: JSON.stringify(payload) });
+      else await api('/api/purchase-orders', { method: 'POST', body: JSON.stringify(payload) });
+      setShowForm(false); setEditId(null); setForm(getEmptyPOForm()); loadAll();
+    } catch (e) { setError(e.message); }
+  };
+
+  const handleApprove = async (id) => { if (!confirm('อนุมัติใบสั่งซื้อ?')) return; try { await api('/api/purchase-orders/' + id + '/approve', { method: 'POST' }); loadAll(); if (viewPO) handleView(id); } catch (e) { setError(e.message); } };
+  const handleReceive = async (id) => { if (!confirm('รับสินค้าและอัปเดต stock?')) return; try { await api('/api/purchase-orders/' + id + '/receive', { method: 'POST', body: JSON.stringify({}) }); loadAll(); if (viewPO) handleView(id); } catch (e) { setError(e.message); } };
+  const handleDelete = async (id) => { if (!confirm('ลบใบสั่งซื้อ?')) return; try { await api('/api/purchase-orders/' + id, { method: 'DELETE' }); loadAll(); } catch (e) { setError(e.message); } };
+  const handleView = async (id) => { try { const d = await api('/api/purchase-orders/' + id); setViewPO(d); } catch (e) { setError(e.message); } };
+
+  const handleEdit = async (id) => {
+    try {
+      const d = await api('/api/purchase-orders/' + id);
+      setForm({ supplier_id: d.supplier_id, po_date: d.po_date ? d.po_date.split('T')[0] : '', expected_date: d.expected_date ? d.expected_date.split('T')[0] : '', vat_rate: d.vat_rate || 7, notes: d.notes || '',
+        items: d.items.length ? d.items.map(i => ({ product_id: i.product_id, unit: i.unit, quantity: i.quantity, unit_price: i.unit_price })) : [{ product_id: '', unit: 'ชิ้น', quantity: '', unit_price: '' }] });
+      setEditId(id); setShowForm(true);
+    } catch (e) { setError(e.message); }
+  };
+
+  const addItem = () => setForm(f => ({ ...f, items: [...f.items, { product_id: '', unit: 'ชิ้น', quantity: '', unit_price: '' }] }));
+  const removeItem = (idx) => setForm(f => ({ ...f, items: f.items.filter((_, i) => i !== idx) }));
+  const updateItem = (idx, k, v) => setForm(f => ({ ...f, items: f.items.map((it, i) => i === idx ? { ...it, [k]: v } : it) }));
+
+  const fmtNum = (v) => parseFloat(v || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 });
+
+  return (
+    <div>
+      <div style={styles.pageHeader}>
+        <h1 style={styles.pageTitle}>ใบสั่งซื้อ / Purchase Order</h1>
+        <button style={styles.btn('primary')} onClick={() => { setForm(getEmptyPOForm()); setEditId(null); setShowForm(true); }}>+ สร้างใบสั่งซื้อ</button>
+      </div>
+
+      {error && <div style={styles.error}>{error} <span style={{ cursor: 'pointer', float: 'right' }} onClick={() => setError('')}>✕</span></div>}
+
+      <div style={styles.searchBar}>
+        <select style={{ ...styles.input, width: 180 }} value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
+          <option value="">ทุกสถานะ</option><option value="draft">ร่าง</option><option value="approved">อนุมัติแล้ว</option><option value="received">รับสินค้าแล้ว</option>
+        </select>
+      </div>
+
+      <div style={styles.card}>
+        {loading ? <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>กำลังโหลด...</div> : (
+          <table style={styles.table}>
+            <thead><tr>
+              <th style={styles.th}>เลขที่</th><th style={styles.th}>ผู้จำหน่าย</th><th style={styles.th}>วันที่</th>
+              <th style={styles.th}>ยอดรวม (VAT)</th><th style={styles.th}>สถานะ</th><th style={styles.th}>จัดการ</th>
+            </tr></thead>
+            <tbody>
+              {list.length === 0 ? <tr><td colSpan={6} style={{ ...styles.td, textAlign: 'center', color: '#aaa' }}>ไม่มีข้อมูล</td></tr> :
+              list.map(r => (
+                <tr key={r.id}>
+                  <td style={styles.td}><span style={{ fontWeight: 600, color: '#1e3a5f', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => handleView(r.id)}>{r.po_number}</span></td>
+                  <td style={styles.td}>{r.supplier_name}</td>
+                  <td style={styles.td}>{r.po_date ? new Date(r.po_date).toLocaleDateString('th-TH') : '-'}</td>
+                  <td style={{ ...styles.td, textAlign: 'right' }}>{fmtNum(r.grand_total)}</td>
+                  <td style={styles.td}><span style={styles.badge(ST_COLOR[r.status])}>{ST_LABEL[r.status]}</span></td>
+                  <td style={styles.td}>
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      <button style={{ ...styles.btn('default'), fontSize: 12, padding: '4px 10px' }} onClick={() => handleView(r.id)}>ดู</button>
+                      {r.status === 'draft' && <>
+                        <button style={{ ...styles.btn('default'), fontSize: 12, padding: '4px 10px' }} onClick={() => handleEdit(r.id)}>แก้ไข</button>
+                        <button style={{ ...styles.btn('success'), fontSize: 12, padding: '4px 10px' }} onClick={() => handleApprove(r.id)}>อนุมัติ</button>
+                        <button style={{ ...styles.btn('danger'), fontSize: 12, padding: '4px 10px' }} onClick={() => handleDelete(r.id)}>ลบ</button>
+                      </>}
+                      {r.status === 'approved' && <button style={{ ...styles.btn('primary'), fontSize: 12, padding: '4px 10px' }} onClick={() => handleReceive(r.id)}>รับสินค้า</button>}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* VIEW PO DETAIL MODAL */}
+      {viewPO && (
+        <div style={styles.overlay} onClick={() => setViewPO(null)}><div style={{ ...styles.modal, width: 700 }} onClick={e => e.stopPropagation()}>
+          <div style={styles.modalHeader}>
+            <span style={styles.modalTitle}>{viewPO.po_number} <span style={styles.badge(ST_COLOR[viewPO.status])}>{ST_LABEL[viewPO.status]}</span></span>
+            <button onClick={() => setViewPO(null)} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button>
+          </div>
+          <div style={styles.modalBody}>
+            <div style={styles.formGrid}>
+              <div><div style={styles.fieldLabel}>ผู้จำหน่าย</div><div style={styles.fieldValue}>{viewPO.supplier_name}</div></div>
+              <div><div style={styles.fieldLabel}>วันที่สั่ง</div><div style={styles.fieldValue}>{viewPO.po_date ? new Date(viewPO.po_date).toLocaleDateString('th-TH') : '-'}</div></div>
+              <div><div style={styles.fieldLabel}>วันที่คาดรับ</div><div style={styles.fieldValue}>{viewPO.expected_date ? new Date(viewPO.expected_date).toLocaleDateString('th-TH') : '-'}</div></div>
+              <div><div style={styles.fieldLabel}>ผู้สร้าง</div><div style={styles.fieldValue}>{viewPO.created_by_name}</div></div>
+            </div>
+            <table style={{ ...styles.table, marginTop: 16 }}>
+              <thead><tr><th style={styles.th}>สินค้า</th><th style={styles.th}>หน่วย</th><th style={styles.th}>จำนวน</th><th style={styles.th}>ราคา/หน่วย</th><th style={styles.th}>รวม</th><th style={styles.th}>รับแล้ว</th></tr></thead>
+              <tbody>
+                {(viewPO.items || []).map(i => (
+                  <tr key={i.id}>
+                    <td style={styles.td}>{i.product_code} - {i.product_name}</td>
+                    <td style={styles.td}>{i.unit}</td>
+                    <td style={{ ...styles.td, textAlign: 'right' }}>{fmtNum(i.quantity)}</td>
+                    <td style={{ ...styles.td, textAlign: 'right' }}>{fmtNum(i.unit_price)}</td>
+                    <td style={{ ...styles.td, textAlign: 'right' }}>{fmtNum(i.total_price)}</td>
+                    <td style={{ ...styles.td, textAlign: 'right' }}>{fmtNum(i.received_qty)}</td>
+                  </tr>
+                ))}
+                <tr style={{ fontWeight: 700, background: '#f8fafc' }}>
+                  <td style={styles.td} colSpan={4}>รวมก่อน VAT</td><td style={{ ...styles.td, textAlign: 'right' }}>{fmtNum(viewPO.total_amount)}</td><td></td>
+                </tr>
+                <tr style={{ background: '#f8fafc' }}>
+                  <td style={styles.td} colSpan={4}>VAT {viewPO.vat_rate}%</td><td style={{ ...styles.td, textAlign: 'right' }}>{fmtNum(viewPO.vat_amount)}</td><td></td>
+                </tr>
+                <tr style={{ fontWeight: 700, background: '#f0f2f5' }}>
+                  <td style={styles.td} colSpan={4}>ยอดรวมสุทธิ</td><td style={{ ...styles.td, textAlign: 'right', color: '#1e3a5f', fontSize: 16 }}>{fmtNum(viewPO.grand_total)}</td><td></td>
+                </tr>
+              </tbody>
+            </table>
+            {viewPO.notes && <div style={{ marginTop: 12, fontSize: 13, color: '#888' }}>หมายเหตุ: {viewPO.notes}</div>}
+            {viewPO.status === 'draft' && <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
+              <button style={styles.btn('success')} onClick={() => handleApprove(viewPO.id)}>อนุมัติ</button>
+            </div>}
+            {viewPO.status === 'approved' && <div style={{ marginTop: 16 }}>
+              <button style={styles.btn('primary')} onClick={() => handleReceive(viewPO.id)}>รับสินค้า + อัปเดต stock</button>
+            </div>}
+          </div>
+        </div></div>
+      )}
+
+      {/* CREATE/EDIT PO MODAL */}
+      {showForm && (
+        <div style={styles.overlay} onClick={() => setShowForm(false)}><div style={{ ...styles.modal, width: 750 }} onClick={e => e.stopPropagation()}>
+          <div style={styles.modalHeader}><span style={styles.modalTitle}>{editId ? 'แก้ไขใบสั่งซื้อ' : 'สร้างใบสั่งซื้อ'}</span><button onClick={() => { setShowForm(false); setEditId(null); }} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button></div>
+          <div style={styles.modalBody}>
+            <div style={styles.formGrid}>
+              <div><label style={styles.label}>ผู้จำหน่าย *</label><select style={styles.input} value={form.supplier_id} onChange={e => setForm(f => ({ ...f, supplier_id: e.target.value }))}><option value="">-- เลือก --</option>{suppliers.map(s => <option key={s.id} value={s.id}>{s.code} - {s.name}</option>)}</select></div>
+              <div><label style={styles.label}>วันที่สั่ง</label><input type="date" style={styles.input} value={form.po_date} onChange={e => setForm(f => ({ ...f, po_date: e.target.value }))} /></div>
+              <div><label style={styles.label}>วันที่คาดรับ</label><input type="date" style={styles.input} value={form.expected_date} onChange={e => setForm(f => ({ ...f, expected_date: e.target.value }))} /></div>
+
+<div><label style={styles.label}>VAT</label>
+                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  <select style={{...styles.input,width:120}} value={form.vat_rate > 0 ? 'yes' : 'no'} onChange={e => setForm(f => ({...f, vat_rate: e.target.value === 'yes' ? 7 : 0}))}>
+                    <option value="yes">มี VAT</option>
+                    <option value="no">ไม่มี VAT</option>
+                  </select>
+                  {form.vat_rate > 0 && <input type="number" style={{...styles.input,width:70}} value={form.vat_rate} onChange={e => setForm(f => ({...f, vat_rate: e.target.value}))} />}
+                  {form.vat_rate > 0 && <span style={{fontSize:12,color:'#888'}}>%</span>}
+                </div>
+              </div>
+
+            </div>
+
+            <div style={{ marginTop: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}><span style={{ fontSize: 14, fontWeight: 700 }}>รายการสินค้า</span><button style={{ ...styles.btn('default'), fontSize: 12, padding: '4px 10px' }} onClick={addItem}>+ เพิ่มรายการ</button></div>
+              {form.items.map((item, idx) => (
+                <div key={idx} style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'flex-end' }}>
+                  <div style={{ flex: 2 }}><label style={{ ...styles.label, fontSize: 11 }}>สินค้า</label><select style={styles.input} value={item.product_id} onChange={e => { const p = products.find(pp => pp.id === parseInt(e.target.value)); updateItem(idx, 'product_id', e.target.value); if (p) { updateItem(idx, 'unit', p.default_unit); updateItem(idx, 'unit_price', p.cost_price); } }}><option value="">-- เลือก --</option>{products.map(p => <option key={p.id} value={p.id}>{p.product_code} - {p.name}{p.model ? ' ('+p.model+')' : ''}</option>)}</select></div>
+                  <div style={{ width: 70 }}><label style={{ ...styles.label, fontSize: 11 }}>หน่วย</label><input style={styles.input} value={item.unit} onChange={e => updateItem(idx, 'unit', e.target.value)} /></div>
+                  <div style={{ width: 90 }}><label style={{ ...styles.label, fontSize: 11 }}>จำนวน</label><input type="number" style={styles.input} value={item.quantity} onChange={e => updateItem(idx, 'quantity', e.target.value)} /></div>
+                  <div style={{ width: 110 }}><label style={{ ...styles.label, fontSize: 11 }}>ราคา/หน่วย</label><input type="number" style={styles.input} value={item.unit_price} onChange={e => updateItem(idx, 'unit_price', e.target.value)} /></div>
+                  <div style={{ width: 100, textAlign: 'right', fontSize: 13, fontWeight: 600, paddingBottom: 8 }}>{fmtNum((parseFloat(item.quantity) || 0) * (parseFloat(item.unit_price) || 0))}</div>
+                  {form.items.length > 1 && <button style={{ ...styles.btn('danger'), padding: '4px 8px', fontSize: 12 }} onClick={() => removeItem(idx)}>✕</button>}
+                </div>
+              ))}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 16, marginTop: 12, fontSize: 14 }}>
+                <span>รวม: <strong>{fmtNum(calcTotal(form.items))}</strong></span>
+                <span>VAT {form.vat_rate}%: <strong>{fmtNum(calcTotal(form.items) * parseFloat(form.vat_rate || 0) / 100)}</strong></span>
+                <span style={{ color: '#1e3a5f', fontWeight: 700, fontSize: 16 }}>สุทธิ: {fmtNum(calcTotal(form.items) * (1 + parseFloat(form.vat_rate || 0) / 100))}</span>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 12 }}><label style={styles.label}>หมายเหตุ</label><textarea style={{ ...styles.input, height: 50 }} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></div>
+          </div>
+          <div style={styles.modalFooter}><button style={styles.btn('default')} onClick={() => { setShowForm(false); setEditId(null); }}>ยกเลิก</button><button style={styles.btn('primary')} onClick={handleSubmit}>{editId ? 'บันทึก' : 'สร้างใบสั่งซื้อ'}</button></div>
+        </div></div>
       )}
     </div>
   );
