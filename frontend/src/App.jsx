@@ -1,0 +1,1704 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { login as apiLogin, getMe, getStaffList, getStaff, createStaff, updateStaff, deleteStaff, getDepartments, changePassword, getStaffContact, saveStaffContact, getStaffAddress, saveStaffAddress, getStaffEmployment, saveStaffEmployment, getStaffSalary, saveStaffSalary, getStaffHistory, getStaffNotes, createStaffNote, getStaffDocuments, uploadStaffDocument, deleteStaffDocument, getUsers, getRoles, createUser, updateUser, resetUserPassword, getRolePermissions, saveRolePermissions, getPayroll, generatePayroll, updatePayrollItem, approvePayroll, getStaffPayroll, getWithholdingCert } from './api';
+
+/* ========== STYLES ========== */
+const styles = {
+  global: `
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; color: #333; }
+    button { cursor: pointer; border: none; outline: none; }
+    input, select, textarea { outline: none; font-family: inherit; }
+  `,
+  loginPage: { display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: 'linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%)' },
+  loginCard: { background: '#fff', borderRadius: 12, padding: '40px 36px', width: 380, boxShadow: '0 20px 60px rgba(0,0,0,0.15)' },
+  loginTitle: { fontSize: 24, fontWeight: 700, color: '#1e3a5f', marginBottom: 8, textAlign: 'center' },
+  loginSub: { fontSize: 14, color: '#888', marginBottom: 28, textAlign: 'center' },
+  inputGroup: { marginBottom: 18 },
+  label: { display: 'block', fontSize: 13, fontWeight: 600, color: '#555', marginBottom: 6 },
+  input: { width: '100%', padding: '10px 14px', border: '1px solid #ddd', borderRadius: 8, fontSize: 14, transition: 'border 0.2s' },
+  btnPrimary: { width: '100%', padding: '12px', background: '#1e3a5f', color: '#fff', borderRadius: 8, fontSize: 15, fontWeight: 600 },
+  error: { background: '#fef2f2', color: '#dc2626', padding: '10px 14px', borderRadius: 8, fontSize: 13, marginBottom: 16 },
+  success: { background: '#ecfdf5', color: '#059669', padding: '10px 14px', borderRadius: 8, fontSize: 13, marginBottom: 16 },
+  layout: { display: 'flex', minHeight: '100vh' },
+  sidebar: { width: 240, background: '#1e3a5f', color: '#fff', display: 'flex', flexDirection: 'column', position: 'fixed', top: 0, left: 0, bottom: 0, zIndex: 100 },
+  sidebarLogo: { padding: '20px 16px', borderBottom: '1px solid rgba(255,255,255,0.1)' },
+  sidebarLogoText: { fontSize: 16, fontWeight: 700 },
+  sidebarLogoSub: { fontSize: 11, opacity: 0.6, marginTop: 2 },
+  sidebarNav: { flex: 1, padding: '12px 0' },
+  sidebarItem: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 20px', fontSize: 14, color: 'rgba(255,255,255,0.7)', textDecoration: 'none', cursor: 'pointer', transition: 'all 0.2s', border: 'none', background: 'none', width: '100%', textAlign: 'left' },
+  sidebarItemActive: { background: 'rgba(255,255,255,0.1)', color: '#fff', borderRight: '3px solid #60a5fa' },
+  sidebarUser: { padding: '16px', borderTop: '1px solid rgba(255,255,255,0.1)' },
+  sidebarUserName: { fontSize: 13, fontWeight: 600 },
+  sidebarUserRole: { fontSize: 11, opacity: 0.6 },
+  main: { marginLeft: 240, flex: 1, padding: '24px 32px', minHeight: '100vh' },
+  pageHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
+  pageTitle: { fontSize: 22, fontWeight: 700, color: '#1e3a5f' },
+  card: { background: '#fff', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.08)', overflow: 'hidden' },
+  table: { width: '100%', borderCollapse: 'collapse' },
+  th: { padding: '12px 16px', textAlign: 'left', fontSize: 12, fontWeight: 600, color: '#888', textTransform: 'uppercase', letterSpacing: 0.5, borderBottom: '2px solid #f0f2f5', background: '#fafbfc' },
+  td: { padding: '12px 16px', fontSize: 14, borderBottom: '1px solid #f0f2f5' },
+  trHover: { cursor: 'pointer', transition: 'background 0.15s' },
+  badge: (color) => ({ display: 'inline-block', padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 600,
+    ...(color === 'green' ? { background: '#ecfdf5', color: '#059669' } :
+       color === 'red' ? { background: '#fef2f2', color: '#dc2626' } :
+       color === 'blue' ? { background: '#eff6ff', color: '#2563eb' } :
+       { background: '#f3f4f6', color: '#6b7280' })
+  }),
+  overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 1000 },
+  modal: { background: '#fff', borderRadius: 12, width: 560, maxHeight: '85vh', overflow: 'auto', boxShadow: '0 25px 50px rgba(0,0,0,0.15)' },
+  modalHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 24px', borderBottom: '1px solid #f0f2f5' },
+  modalTitle: { fontSize: 18, fontWeight: 700, color: '#1e3a5f' },
+  modalBody: { padding: '24px' },
+  modalFooter: { display: 'flex', justifyContent: 'flex-end', gap: 10, padding: '16px 24px', borderTop: '1px solid #f0f2f5' },
+  btn: (v) => ({
+    padding: '8px 18px', borderRadius: 8, fontSize: 14, fontWeight: 600, transition: 'all 0.2s',
+    ...(v === 'primary' ? { background: '#1e3a5f', color: '#fff' } :
+       v === 'danger' ? { background: '#dc2626', color: '#fff' } :
+       v === 'success' ? { background: '#059669', color: '#fff' } :
+       { background: '#f3f4f6', color: '#555', border: '1px solid #ddd' })
+  }),
+  searchBar: { display: 'flex', gap: 12, marginBottom: 20 },
+  searchInput: { flex: 1, padding: '10px 14px', border: '1px solid #ddd', borderRadius: 8, fontSize: 14 },
+  detailHeader: { padding: '24px', borderBottom: '1px solid #f0f2f5', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' },
+  detailAvatar: { width: 64, height: 64, borderRadius: '50%', background: '#1e3a5f', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 700 },
+  detailName: { fontSize: 20, fontWeight: 700, color: '#1e3a5f' },
+  detailSub: { fontSize: 14, color: '#888', marginTop: 2 },
+  tabs: { display: 'flex', borderBottom: '2px solid #f0f2f5', overflowX: 'auto' },
+  tab: (a) => ({ padding: '12px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer', border: 'none', background: 'none', color: a ? '#1e3a5f' : '#888', borderBottom: a ? '2px solid #1e3a5f' : '2px solid transparent', marginBottom: -2, whiteSpace: 'nowrap' }),
+  detailGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px 32px', padding: 24 },
+  fieldLabel: { fontSize: 12, color: '#888', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 },
+  fieldValue: { fontSize: 15, color: '#333', marginTop: 4 },
+  statsRow: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 },
+  statCard: { background: '#fff', borderRadius: 12, padding: '20px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' },
+  statValue: { fontSize: 28, fontWeight: 700, color: '#1e3a5f' },
+  statLabel: { fontSize: 13, color: '#888', marginTop: 4 },
+  formGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' },
+};
+
+/* ========== LOGIN ========== */
+function LoginPage({ onLogin }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const handleSubmit = async (e) => {
+    e.preventDefault(); setError(''); setLoading(true);
+    try { const data = await apiLogin(username, password); localStorage.setItem('token', data.token); onLogin(data.user); }
+    catch (err) { setError(err.message || 'Login failed'); } finally { setLoading(false); }
+  };
+  return (
+    <div style={styles.loginPage}><div style={styles.loginCard}>
+      <div style={styles.loginTitle}>Sales Management</div>
+      <div style={styles.loginSub}>เข้าสู่ระบบเพื่อจัดการข้อมูล</div>
+      {error && <div style={styles.error}>{error}</div>}
+      <form onSubmit={handleSubmit}>
+        <div style={styles.inputGroup}><label style={styles.label}>Username</label><input style={styles.input} value={username} onChange={e => setUsername(e.target.value)} placeholder="กรอก username" autoFocus /></div>
+        <div style={styles.inputGroup}><label style={styles.label}>Password</label><input style={styles.input} type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="กรอก password" /></div>
+        <button type="submit" style={{ ...styles.btnPrimary, opacity: loading ? 0.7 : 1 }} disabled={loading}>{loading ? 'กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ'}</button>
+      </form>
+    </div></div>
+  );
+}
+
+/* ========== SIDEBAR ========== */
+const menuItems = [
+  { key: 'dashboard', icon: '📊', label: 'Dashboard' },
+  { key: 'staff', icon: '👥', label: 'Staff Management' },
+  { key: 'payroll', icon: '💰', label: 'Payroll' },
+  { key: 'withholding', icon: '📄', label: 'หัก ณ ที่จ่าย' },
+  { key: 'users', icon: '🔐', label: 'User Management' },
+];
+function Sidebar({ active, onNavigate, user, onLogout }) {
+  return (
+    <div style={styles.sidebar}>
+      <div style={styles.sidebarLogo}><div style={styles.sidebarLogoText}>Sales System</div><div style={styles.sidebarLogoSub}>Management Platform</div></div>
+      <nav style={styles.sidebarNav}>
+        {menuItems.map(item => (
+          <button key={item.key} onClick={() => onNavigate(item.key)} style={{ ...styles.sidebarItem, ...(active === item.key ? styles.sidebarItemActive : {}) }}>
+            <span>{item.icon}</span><span>{item.label}</span>
+          </button>
+        ))}
+      </nav>
+      <div style={styles.sidebarUser}>
+        <div style={styles.sidebarUserName}>{user?.first_name_th} {user?.last_name_th}</div>
+        <div style={styles.sidebarUserRole}>{user?.role_name || user?.role_code}</div>
+        <button onClick={onLogout} style={{ ...styles.btn('default'), marginTop: 10, width: '100%', fontSize: 12 }}>ออกจากระบบ</button>
+      </div>
+    </div>
+  );
+}
+
+/* ========== DASHBOARD ========== */
+function DashboardPage({ staffList }) {
+  const active = staffList.filter(s => s.status === 'active').length;
+  const depts = [...new Set(staffList.map(s => s.department_name).filter(Boolean))];
+  return (
+    <div>
+      <div style={styles.pageHeader}><h1 style={styles.pageTitle}>Dashboard</h1></div>
+      <div style={styles.statsRow}>
+        <div style={styles.statCard}><div style={styles.statValue}>{staffList.length}</div><div style={styles.statLabel}>พนักงานทั้งหมด</div></div>
+        <div style={styles.statCard}><div style={styles.statValue}>{active}</div><div style={styles.statLabel}>Active</div></div>
+        <div style={styles.statCard}><div style={styles.statValue}>{depts.length}</div><div style={styles.statLabel}>แผนก</div></div>
+        <div style={styles.statCard}><div style={styles.statValue}>{staffList.length - active}</div><div style={styles.statLabel}>Inactive</div></div>
+      </div>
+      <div style={styles.card}><div style={{ padding: 24 }}>
+        <h3 style={{ fontSize: 16, fontWeight: 700, color: '#1e3a5f', marginBottom: 16 }}>พนักงานล่าสุด</h3>
+        <table style={styles.table}><thead><tr><th style={styles.th}>รหัส</th><th style={styles.th}>ชื่อ</th><th style={styles.th}>แผนก</th><th style={styles.th}>ตำแหน่ง</th><th style={styles.th}>สถานะ</th></tr></thead>
+        <tbody>{staffList.slice(0, 5).map(s => (
+          <tr key={s.id}><td style={styles.td}>{s.employee_code}</td><td style={styles.td}>{s.first_name_th} {s.last_name_th}</td><td style={styles.td}>{s.department_name || '-'}</td><td style={styles.td}>{s.position || '-'}</td><td style={styles.td}><span style={styles.badge(s.status === 'active' ? 'green' : 'red')}>{s.status}</span></td></tr>
+        ))}</tbody></table>
+      </div></div>
+    </div>
+  );
+}
+
+/* ========== STAFF LIST ========== */
+function StaffListPage({ staffList, onSelect, onRefresh }) {
+  const [search, setSearch] = useState('');
+  const [showCreate, setShowCreate] = useState(false);
+  const [departments, setDepartments] = useState([]);
+  useEffect(() => { getDepartments().then(d => setDepartments(d.data || [])).catch(() => {}); }, []);
+  const filtered = staffList.filter(s => !search || [s.employee_code, s.first_name_th, s.last_name_th, s.first_name_en, s.last_name_en].some(f => f && f.toLowerCase().includes(search.toLowerCase())));
+  return (
+    <div>
+      <div style={styles.pageHeader}><h1 style={styles.pageTitle}>Staff Management</h1><button style={styles.btn('primary')} onClick={() => setShowCreate(true)}>+ เพิ่มพนักงาน</button></div>
+      <div style={styles.searchBar}><input style={styles.searchInput} placeholder="ค้นหาพนักงาน..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+      <div style={styles.card}><table style={styles.table}><thead><tr><th style={styles.th}>รหัส</th><th style={styles.th}>ชื่อ-นามสกุล</th><th style={styles.th}>ชื่อ (EN)</th><th style={styles.th}>แผนก</th><th style={styles.th}>ตำแหน่ง</th><th style={styles.th}>สถานะ</th></tr></thead>
+      <tbody>{filtered.map(s => (
+        <tr key={s.id} style={styles.trHover} onClick={() => onSelect(s.id)} onMouseEnter={e => e.currentTarget.style.background='#f8fafc'} onMouseLeave={e => e.currentTarget.style.background=''}>
+          <td style={styles.td}><span style={{ fontWeight: 600, color: '#1e3a5f' }}>{s.employee_code}</span></td>
+          <td style={styles.td}>{s.title_th}{s.first_name_th} {s.last_name_th}</td>
+          <td style={styles.td}>{s.first_name_en ? `${s.first_name_en} ${s.last_name_en || ''}` : '-'}</td>
+          <td style={styles.td}>{s.department_name || '-'}</td><td style={styles.td}>{s.position || '-'}</td>
+          <td style={styles.td}><span style={styles.badge(s.status === 'active' ? 'green' : 'red')}>{s.status}</span></td>
+        </tr>
+      ))}{filtered.length === 0 && <tr><td colSpan={6} style={{ ...styles.td, textAlign: 'center', color: '#888', padding: 40 }}>ไม่พบข้อมูลพนักงาน</td></tr>}</tbody></table></div>
+      {showCreate && <CreateStaffModal departments={departments} onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); onRefresh(); }} />}
+    </div>
+  );
+}
+
+/* ========== CREATE STAFF MODAL ========== */
+function CreateStaffModal({ departments, onClose, onCreated }) {
+  const [form, setForm] = useState({ title_th: 'นาย', first_name_th: '', last_name_th: '', nickname_th: '', first_name_en: '', last_name_en: '', department_id: '', position: '', hire_date: '', id_card_number: '', date_of_birth: '' });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const h = (f, v) => setForm(p => ({ ...p, [f]: v }));
+  const handleSubmit = async () => {
+    setError('');
+    if (!form.first_name_th || !form.last_name_th) return setError('กรุณากรอกชื่อและนามสกุล');
+    setLoading(true);
+    try { await createStaff({ ...form, department_id: form.department_id || null }); onCreated(); }
+    catch (err) { setError(err.message); } finally { setLoading(false); }
+  };
+  return (
+    <div style={styles.overlay} onClick={onClose}><div style={styles.modal} onClick={e => e.stopPropagation()}>
+      <div style={styles.modalHeader}><span style={styles.modalTitle}>เพิ่มพนักงานใหม่</span><button onClick={onClose} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button></div>
+      <div style={styles.modalBody}>
+        {error && <div style={styles.error}>{error}</div>}
+        <div style={styles.formGrid}>
+          <div><label style={styles.label}>รหัสพนักงาน</label><div style={{...styles.input, background:'#f3f4f6', color:'#888'}}>Auto-generated</div></div>
+          <div><label style={styles.label}>คำนำหน้า</label><select style={styles.input} value={form.title_th} onChange={e => h('title_th', e.target.value)}><option>นาย</option><option>นาง</option><option>นางสาว</option></select></div>
+          <div><label style={styles.label}>ชื่อ (TH) *</label><input style={styles.input} value={form.first_name_th} onChange={e => h('first_name_th', e.target.value)} /></div>
+          <div><label style={styles.label}>นามสกุล (TH) *</label><input style={styles.input} value={form.last_name_th} onChange={e => h('last_name_th', e.target.value)} /></div>
+          <div><label style={styles.label}>ชื่อเล่น (TH)</label><input style={styles.input} value={form.nickname_th} onChange={e => h('nickname_th', e.target.value)} /></div>
+          <div><label style={styles.label}>เลขบัตรประชาชน</label><input style={styles.input} value={form.id_card_number} onChange={e => h('id_card_number', e.target.value)} /></div>
+          <div><label style={styles.label}>ชื่อ (EN)</label><input style={styles.input} value={form.first_name_en} onChange={e => h('first_name_en', e.target.value)} /></div>
+          <div><label style={styles.label}>นามสกุล (EN)</label><input style={styles.input} value={form.last_name_en} onChange={e => h('last_name_en', e.target.value)} /></div>
+          <div><label style={styles.label}>แผนก</label><select style={styles.input} value={form.department_id} onChange={e => h('department_id', e.target.value)}><option value="">-- เลือกแผนก --</option>{departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
+          <div><label style={styles.label}>ตำแหน่ง</label><input style={styles.input} value={form.position} onChange={e => h('position', e.target.value)} /></div>
+          <div><label style={styles.label}>วันเกิด</label><input style={styles.input} type="date" value={form.date_of_birth} onChange={e => h('date_of_birth', e.target.value)} /></div>
+          <div><label style={styles.label}>วันเริ่มงาน</label><input style={styles.input} type="date" value={form.hire_date} onChange={e => h('hire_date', e.target.value)} /></div>
+        </div>
+      </div>
+      <div style={styles.modalFooter}><button style={styles.btn('default')} onClick={onClose}>ยกเลิก</button><button style={{ ...styles.btn('primary'), opacity: loading ? 0.7 : 1 }} onClick={handleSubmit} disabled={loading}>{loading ? 'กำลังบันทึก...' : 'บันทึก'}</button></div>
+    </div></div>
+  );
+}
+
+/* ========== EDITABLE SUB-TAB COMPONENT ========== */
+function EditableTab({ staffId, fetchFn, saveFn, fields, title }) {
+  const [data, setData] = useState(null);
+  const [form, setForm] = useState({});
+  const [editing, setEditing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => { load(); }, [staffId]);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await fetchFn(staffId);
+      setData(res.data);
+      setForm(res.data || {});
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  };
+
+  const handleSave = async () => {
+    setSaving(true); setMsg('');
+    try {
+      const res = await saveFn(staffId, form);
+      setData(res.data);
+      setForm(res.data);
+      setEditing(false);
+      setMsg(res.message || 'บันทึกสำเร็จ');
+      setTimeout(() => setMsg(''), 3000);
+    } catch (err) { setMsg('Error: ' + err.message); }
+    finally { setSaving(false); }
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>กำลังโหลด...</div>;
+
+  return (
+    <div style={{ padding: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <h3 style={{ fontSize: 16, fontWeight: 700, color: '#1e3a5f' }}>{title}</h3>
+        {!editing && <button style={styles.btn('primary')} onClick={() => setEditing(true)}>แก้ไข</button>}
+      </div>
+      {msg && <div style={msg.startsWith('Error') ? styles.error : styles.success}>{msg}</div>}
+      {!editing ? (
+        <div style={styles.detailGrid}>
+          {fields.map(f => (
+            <div key={f.key}>
+              <div style={styles.fieldLabel}>{f.label}</div>
+              <div style={styles.fieldValue}>{f.type === 'date' && data?.[f.key] ? new Date(data[f.key]).toLocaleDateString('th-TH') : (data?.[f.key] || '-')}</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div>
+          <div style={styles.formGrid}>
+            {fields.map(f => (
+              <div key={f.key}>
+                <label style={styles.label}>{f.label}</label>
+                {f.type === 'select' ? (
+                  <select style={styles.input} value={form[f.key] || ''} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))}>
+                    <option value="">-- เลือก --</option>
+                    {f.options.map(o => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                ) : f.type === 'textarea' ? (
+                  <textarea style={{ ...styles.input, minHeight: 80 }} value={form[f.key] || ''} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} />
+                ) : f.type === 'date' ? (
+                  <input style={styles.input} type="date" value={form[f.key] ? String(form[f.key]).substring(0, 10) : ''} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} />
+                ) : (
+                  <input style={styles.input} type={f.type || 'text'} value={form[f.key] || ''} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))} />
+                )}
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 10, marginTop: 20, justifyContent: 'flex-end' }}>
+            <button style={styles.btn('default')} onClick={() => { setEditing(false); setForm(data || {}); }}>ยกเลิก</button>
+            <button style={{ ...styles.btn('success'), opacity: saving ? 0.7 : 1 }} onClick={handleSave} disabled={saving}>{saving ? 'กำลังบันทึก...' : 'บันทึก'}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ========== CONTACT FIELDS ========== */
+const contactFields = [
+  { key: 'mobile_phone', label: 'เบอร์มือถือ' },
+  { key: 'email', label: 'อีเมล' },
+  { key: 'line_id', label: 'Line ID' },
+  { key: 'address', label: 'ที่อยู่', type: 'textarea' },
+  { key: 'emergency_contact_name', label: 'ผู้ติดต่อฉุกเฉิน' },
+  { key: 'emergency_contact_phone', label: 'เบอร์ผู้ติดต่อฉุกเฉิน' },
+];
+
+/* ========== ADDRESS FIELDS ========== */
+const addressFields = [
+  { key: 'house_no', label: 'เลขที่' },
+  { key: 'moo', label: 'หมู่ที่' },
+  { key: 'soi', label: 'ซอย' },
+  { key: 'intersection', label: 'แยก' },
+  { key: 'road', label: 'ถนน' },
+  { key: 'sub_district', label: 'ตำบล/แขวง' },
+  { key: 'district', label: 'อำเภอ/เขต' },
+  { key: 'province', label: 'จังหวัด' },
+  { key: 'postal_code', label: 'รหัสไปรษณีย์' },
+];
+
+/* ========== EMPLOYMENT FIELDS ========== */
+const employmentFields = [
+  { key: 'hire_date', label: 'วันที่เริ่มงาน', type: 'date' },
+  { key: 'department', label: 'แผนก' },
+  { key: 'position', label: 'ตำแหน่ง' },
+  { key: 'payment_channel', label: 'ช่องทางการจ่าย', type: 'select', options: ['โอนเงิน', 'เงินสด', 'เช็ค'] },
+  { key: 'bank_name', label: 'ธนาคาร', type: 'select', options: ['ธ.กรุงเทพ', 'ธ.กสิกรไทย', 'ธ.ไทยพาณิชย์', 'ธ.กรุงไทย', 'ธ.ทหารไทยธนชาต', 'ธ.กรุงศรีอยุธยา'] },
+  { key: 'bank_account_no', label: 'เลขที่บัญชี' },
+  { key: 'bank_account_type', label: 'ประเภทบัญชี', type: 'select', options: ['บัญชีออมทรัพย์', 'บัญชีกระแสรายวัน'] },
+  { key: 'bank_branch', label: 'สาขา' },
+];
+
+/* ========== SALARY TAB (Custom) ========== */
+/* ========== TAX CALCULATION ========== */
+const TAX_BRACKETS = [
+  { min: 0, max: 150000, rate: 0 },
+  { min: 150000, max: 300000, rate: 0.05 },
+  { min: 300000, max: 500000, rate: 0.10 },
+  { min: 500000, max: 750000, rate: 0.15 },
+  { min: 750000, max: 1000000, rate: 0.20 },
+  { min: 1000000, max: 2000000, rate: 0.25 },
+  { min: 2000000, max: 5000000, rate: 0.30 },
+  { min: 5000000, max: Infinity, rate: 0.35 },
+];
+
+function calcProgressiveTax(netIncome) {
+  let tax = 0;
+  let details = [];
+  for (const b of TAX_BRACKETS) {
+    if (netIncome <= b.min) break;
+    const taxable = Math.min(netIncome, b.max) - b.min;
+    const t = taxable * b.rate;
+    tax += t;
+    if (taxable > 0) details.push({ range: `${b.min.toLocaleString()}-${b.max === Infinity ? 'ขึ้นไป' : b.max.toLocaleString()}`, rate: (b.rate * 100) + '%', taxable, tax: t });
+  }
+  return { tax: Math.round(tax), details };
+}
+
+function calcTaxSummary(salary, ssMonthly, ssEligible) {
+  const monthSalary = parseFloat(salary) || 0;
+  const yearlyIncome = monthSalary * 12;
+  const expense = Math.min(yearlyIncome * 0.5, 100000);
+  const personal = 60000;
+  const ssYearly = ssEligible ? (parseFloat(ssMonthly) || 0) * 12 : 0;
+  const netIncome = Math.max(yearlyIncome - expense - personal - ssYearly, 0);
+  const { tax: yearlyTax, details } = calcProgressiveTax(netIncome);
+  const monthlyTax = Math.round(yearlyTax / 12);
+  return { yearlyIncome, expense, personal, ssYearly, netIncome, yearlyTax, monthlyTax, details };
+}
+
+function SalaryTab({ staffId }) {
+  const [data, setData] = useState(null);
+  const [form, setForm] = useState({});
+  const [editing, setEditing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [showTaxDetail, setShowTaxDetail] = useState(false);
+
+  useEffect(() => { load(); }, [staffId]);
+
+  const load = async () => {
+    setLoading(true);
+    try { const res = await getStaffSalary(staffId); setData(res.data); setForm(res.data || {}); }
+    catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  };
+
+  const calcSS = (salary, rate, maxSalary) => {
+    const s = parseFloat(salary) || 0;
+    const r = parseFloat(rate) || 5;
+    const m = parseFloat(maxSalary) || 17500;
+    return Math.round(Math.min(s, m) * r / 100);
+  };
+
+  const handleSave = async () => {
+    setSaving(true); setMsg('');
+    try {
+      const isEligible = form.social_security_eligible === true || form.social_security_eligible === 'true';
+      const ssAmount = isEligible ? calcSS(form.salary, form.ss_rate, form.ss_max_salary) : 0;
+      const taxInfo = calcTaxSummary(form.salary, ssAmount, isEligible);
+      const autoCalc = form.auto_calc_tax === true || form.auto_calc_tax === 'true';
+      const wht = autoCalc ? taxInfo.monthlyTax : (parseFloat(form.withholding_tax) || 0);
+      const payload = { ...form, social_security_eligible: isEligible, social_security: ssAmount, withholding_tax: wht, tax_condition: autoCalc ? 'คำนวณอัตโนมัติ (ขั้นบันได)' : form.tax_condition };
+      const res = await saveStaffSalary(staffId, payload);
+      setData(res.data); setForm(res.data); setEditing(false);
+      setMsg('บันทึกข้อมูลเงินเดือนสำเร็จ');
+      setTimeout(() => setMsg(''), 3000);
+    } catch (err) { setMsg('Error: ' + err.message); }
+    finally { setSaving(false); }
+  };
+
+  const h = (k, v) => setForm(p => ({ ...p, [k]: v }));
+  const isEligible = form.social_security_eligible === true || form.social_security_eligible === 'true';
+  const autoCalc = form.auto_calc_tax === true || form.auto_calc_tax === 'true';
+  const ssMonthly = isEligible ? calcSS(form.salary, form.ss_rate || 5, form.ss_max_salary || 17500) : 0;
+  const taxInfo = calcTaxSummary(form.salary, ssMonthly, isEligible);
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>กำลังโหลด...</div>;
+
+  const fmtNum = (v) => v ? parseFloat(v).toLocaleString('th-TH') : '0';
+  const fmtB = (v) => (v || 0).toLocaleString('th-TH');
+  const boxStyle = { background: '#f8fafc', borderRadius: 8, padding: 16, marginTop: 16 };
+  const summaryRow = { display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 14 };
+  const hrStyle = { border: 'none', borderTop: '1px dashed #ddd', margin: '8px 0' };
+
+  // View for saved data
+  const viewTax = data ? calcTaxSummary(data.salary, data.social_security, data.social_security_eligible) : null;
+
+  return (
+    <div style={{ padding: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <h3 style={{ fontSize: 16, fontWeight: 700, color: '#1e3a5f' }}>ข้อมูลเงินเดือน</h3>
+        {!editing && <button style={styles.btn('primary')} onClick={() => setEditing(true)}>แก้ไข</button>}
+      </div>
+      {msg && <div style={msg.startsWith('Error') ? styles.error : styles.success}>{msg}</div>}
+
+      {!editing ? (
+        <div>
+          <div style={styles.detailGrid}>
+            <div><div style={styles.fieldLabel}>ประเภทพนักงาน</div><div style={styles.fieldValue}>{data?.employee_type === 'monthly' ? 'รายเดือน' : data?.employee_type === 'daily' ? 'รายวัน' : data?.employee_type || '-'}</div></div>
+            <div><div style={styles.fieldLabel}>เงินเดือน/ค่าจ้าง</div><div style={styles.fieldValue}>{fmtNum(data?.salary)} บาท</div></div>
+            <div><div style={styles.fieldLabel}>ประกันสังคม</div><div style={styles.fieldValue}><span style={styles.badge(data?.social_security_eligible ? 'green' : 'red')}>{data?.social_security_eligible ? 'มี' : 'ไม่มี'}</span></div></div>
+            {data?.social_security_eligible && (
+              <>
+                <div><div style={styles.fieldLabel}>อัตราสมทบ (%)</div><div style={styles.fieldValue}>{data?.ss_rate || 5}%</div></div>
+                <div><div style={styles.fieldLabel}>ฐานเงินเดือนสูงสุด</div><div style={styles.fieldValue}>{fmtNum(data?.ss_max_salary)} บาท</div></div>
+                <div><div style={styles.fieldLabel}>เงินสมทบประกันสังคม</div><div style={{ fontSize: 15, color: '#059669', fontWeight: 600 }}>{fmtNum(data?.social_security)} บาท/เดือน</div></div>
+              </>
+            )}
+            <div><div style={styles.fieldLabel}>หัก ณ ที่จ่ายรายเดือน</div><div style={{ fontSize: 15, color: '#dc2626', fontWeight: 600 }}>{fmtNum(data?.withholding_tax)} บาท</div></div>
+            <div><div style={styles.fieldLabel}>เงื่อนไขภาษี</div><div style={styles.fieldValue}>{data?.tax_condition || '-'}</div></div>
+          </div>
+
+          {viewTax && data?.salary > 0 && (
+            <div style={boxStyle}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: '#1e3a5f' }}>สรุปการคำนวณภาษี (ประมาณการทั้งปี)</span>
+                <button style={{ ...styles.btn('default'), fontSize: 12 }} onClick={() => setShowTaxDetail(!showTaxDetail)}>{showTaxDetail ? 'ซ่อน' : 'ดูรายละเอียด'}</button>
+              </div>
+              {showTaxDetail && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={summaryRow}><span>รายได้ทั้งปี ({fmtNum(data?.salary)} x 12)</span><span style={{ fontWeight: 600 }}>{fmtB(viewTax.yearlyIncome)} บาท</span></div>
+                  <div style={summaryRow}><span>หักค่าใช้จ่าย (50% ไม่เกิน 100,000)</span><span style={{ color: '#dc2626' }}>-{fmtB(viewTax.expense)} บาท</span></div>
+                  <div style={summaryRow}><span>หักค่าลดหย่อนส่วนตัว</span><span style={{ color: '#dc2626' }}>-{fmtB(viewTax.personal)} บาท</span></div>
+                  {viewTax.ssYearly > 0 && <div style={summaryRow}><span>หักประกันสังคม ({fmtNum(data?.social_security)} x 12)</span><span style={{ color: '#dc2626' }}>-{fmtB(viewTax.ssYearly)} บาท</span></div>}
+                  <hr style={hrStyle} />
+                  <div style={{ ...summaryRow, fontWeight: 700 }}><span>เงินได้สุทธิ</span><span>{fmtB(viewTax.netIncome)} บาท</span></div>
+                  <hr style={hrStyle} />
+                  {viewTax.details.map((d, i) => (
+                    <div key={i} style={{ ...summaryRow, fontSize: 13, color: '#666' }}><span>{d.range} ({d.rate})</span><span>{fmtB(d.tax)} บาท</span></div>
+                  ))}
+                  <hr style={hrStyle} />
+                  <div style={{ ...summaryRow, fontWeight: 700, color: '#1e3a5f' }}><span>ภาษีทั้งปี</span><span>{fmtB(viewTax.yearlyTax)} บาท</span></div>
+                  <div style={{ ...summaryRow, fontWeight: 700, color: '#dc2626', fontSize: 16 }}><span>หัก ณ ที่จ่ายรายเดือน (÷ 12)</span><span>{fmtB(viewTax.monthlyTax)} บาท</span></div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {data?.remarks && <div style={{ marginTop: 16 }}><div style={styles.fieldLabel}>หมายเหตุ</div><div style={styles.fieldValue}>{data.remarks}</div></div>}
+        </div>
+      ) : (
+        <div>
+          <div style={styles.formGrid}>
+            <div><label style={styles.label}>ประเภทพนักงาน</label>
+              <select style={styles.input} value={form.employee_type || ''} onChange={e => h('employee_type', e.target.value)}>
+                <option value="">-- เลือก --</option><option value="monthly">รายเดือน</option><option value="daily">รายวัน</option><option value="hourly">รายชั่วโมง</option><option value="contract">สัญญาจ้าง</option>
+              </select>
+            </div>
+            <div><label style={styles.label}>เงินเดือน/ค่าจ้าง (บาท)</label><input style={styles.input} type="number" value={form.salary || ''} onChange={e => h('salary', e.target.value)} /></div>
+            <div><label style={styles.label}>ประกันสังคม</label>
+              <select style={styles.input} value={String(isEligible)} onChange={e => h('social_security_eligible', e.target.value)}>
+                <option value="false">ไม่มี</option><option value="true">มี</option>
+              </select>
+            </div>
+            {isEligible && (
+              <>
+                <div><label style={styles.label}>อัตราสมทบ (%)</label><input style={styles.input} type="number" step="0.5" value={form.ss_rate || 5} onChange={e => h('ss_rate', e.target.value)} /></div>
+                <div><label style={styles.label}>ฐานเงินเดือนสูงสุด (บาท)</label><input style={styles.input} type="number" value={form.ss_max_salary || 17500} onChange={e => h('ss_max_salary', e.target.value)} /></div>
+                <div>
+                  <label style={styles.label}>เงินสมทบ (คำนวณอัตโนมัติ)</label>
+                  <div style={{ ...styles.input, background: '#ecfdf5', color: '#059669', fontWeight: 700, fontSize: 16 }}>
+                    {calcSS(form.salary, form.ss_rate || 5, form.ss_max_salary || 17500).toLocaleString('th-TH')} บาท/เดือน
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div style={{ ...boxStyle, background: '#eff6ff', border: '1px solid #bfdbfe' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: '#1e3a5f' }}>คำนวณภาษีหัก ณ ที่จ่าย</span>
+              <select style={{ ...styles.input, width: 'auto' }} value={String(autoCalc)} onChange={e => h('auto_calc_tax', e.target.value)}>
+                <option value="true">อัตโนมัติ (ขั้นบันได)</option>
+                <option value="false">กำหนดเอง</option>
+              </select>
+            </div>
+
+            {autoCalc && parseFloat(form.salary) > 0 && (
+              <div>
+                <div style={summaryRow}><span>รายได้ทั้งปี ({fmtB(parseFloat(form.salary) || 0)} x 12)</span><span style={{ fontWeight: 600 }}>{fmtB(taxInfo.yearlyIncome)}</span></div>
+                <div style={summaryRow}><span>หักค่าใช้จ่าย (50% ไม่เกิน 100,000)</span><span style={{ color: '#dc2626' }}>-{fmtB(taxInfo.expense)}</span></div>
+                <div style={summaryRow}><span>หักค่าลดหย่อนส่วนตัว</span><span style={{ color: '#dc2626' }}>-{fmtB(taxInfo.personal)}</span></div>
+                {taxInfo.ssYearly > 0 && <div style={summaryRow}><span>หักประกันสังคม ({fmtB(ssMonthly)} x 12)</span><span style={{ color: '#dc2626' }}>-{fmtB(taxInfo.ssYearly)}</span></div>}
+                <hr style={hrStyle} />
+                <div style={{ ...summaryRow, fontWeight: 700 }}><span>เงินได้สุทธิ</span><span>{fmtB(taxInfo.netIncome)} บาท</span></div>
+                <hr style={hrStyle} />
+                {taxInfo.details.map((d, i) => (
+                  <div key={i} style={{ ...summaryRow, fontSize: 13, color: '#666' }}><span>{d.range} ({d.rate})</span><span>{fmtB(d.tax)}</span></div>
+                ))}
+                <hr style={hrStyle} />
+                <div style={{ ...summaryRow, fontWeight: 700, color: '#1e3a5f' }}><span>ภาษีทั้งปี</span><span>{fmtB(taxInfo.yearlyTax)} บาท</span></div>
+                <div style={{ ...summaryRow, fontWeight: 700, color: '#dc2626', fontSize: 18, background: '#fef2f2', padding: '8px 12px', borderRadius: 8, marginTop: 4 }}>
+                  <span>หัก ณ ที่จ่ายรายเดือน</span><span>{fmtB(taxInfo.monthlyTax)} บาท</span>
+                </div>
+              </div>
+            )}
+
+            {!autoCalc && (
+              <div style={styles.formGrid}>
+                <div><label style={styles.label}>หัก ณ ที่จ่ายรายเดือน (บาท)</label><input style={styles.input} type="number" value={form.withholding_tax || ''} onChange={e => h('withholding_tax', e.target.value)} /></div>
+                <div><label style={styles.label}>เงื่อนไขภาษี</label><input style={styles.input} value={form.tax_condition || ''} onChange={e => h('tax_condition', e.target.value)} /></div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ marginTop: 16 }}><label style={styles.label}>หมายเหตุ</label><textarea style={{ ...styles.input, minHeight: 60 }} value={form.remarks || ''} onChange={e => h('remarks', e.target.value)} /></div>
+          <div style={{ display: 'flex', gap: 10, marginTop: 20, justifyContent: 'flex-end' }}>
+            <button style={styles.btn('default')} onClick={() => { setEditing(false); setForm(data || {}); }}>ยกเลิก</button>
+            <button style={{ ...styles.btn('success'), opacity: saving ? 0.7 : 1 }} onClick={handleSave} disabled={saving}>{saving ? 'กำลังบันทึก...' : 'บันทึก'}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ========== HISTORY TAB ========== */
+function HistoryTab({ staffId }) {
+  const [history, setHistory] = useState([]);
+  const [salary, setSalary] = useState(null);
+  const [employment, setEmployment] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('all');
+
+  useEffect(() => {
+    Promise.all([
+      getStaffHistory(staffId).then(r => setHistory(r.data || [])),
+      getStaffSalary(staffId).then(r => setSalary(r.data)).catch(() => {}),
+      getStaffEmployment(staffId).then(r => setEmployment(r.data)).catch(() => {}),
+    ]).finally(() => setLoading(false));
+  }, [staffId]);
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>กำลังโหลด...</div>;
+
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' }) : '-';
+  const fmtTime = (d) => d ? new Date(d).toLocaleString('th-TH', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
+  const fmtNum = (v) => v ? parseFloat(v).toLocaleString('th-TH') : '0';
+
+  const cardStyle = { background: '#f8fafc', borderRadius: 10, padding: '16px 20px', marginBottom: 16, border: '1px solid #e2e8f0' };
+  const labelStyle = { fontSize: 12, color: '#888', fontWeight: 600 };
+  const valueStyle = { fontSize: 15, color: '#333', marginTop: 2 };
+
+  const filters = [
+    { key: 'all', label: 'ทั้งหมด', icon: '📋' },
+    { key: 'เงินเดือน', label: 'เงินเดือน', icon: '💰' },
+    { key: 'ตำแหน่ง', label: 'ตำแหน่ง', icon: '📌' },
+    { key: 'แผนก', label: 'แผนก', icon: '🏢' },
+    { key: 'other', label: 'อื่นๆ', icon: '📝' },
+  ];
+
+  const mainFields = ['เงินเดือน', 'ตำแหน่ง', 'แผนก'];
+  const filtered = filter === 'all' ? history
+    : filter === 'other' ? history.filter(h => !mainFields.includes(h.field_changed))
+    : history.filter(h => h.field_changed === filter);
+
+  // Group by date
+  const grouped = {};
+  filtered.forEach(h => {
+    const dateKey = fmtDate(h.changed_at);
+    if (!grouped[dateKey]) grouped[dateKey] = [];
+    grouped[dateKey].push(h);
+  });
+
+  const filterBtnStyle = (active) => ({
+    padding: '6px 14px', borderRadius: 20, fontSize: 13, fontWeight: 600, cursor: 'pointer', border: 'none',
+    background: active ? '#1e3a5f' : '#f3f4f6', color: active ? '#fff' : '#666', transition: 'all 0.2s'
+  });
+
+  return (
+    <div style={{ padding: 24 }}>
+      <h3 style={{ fontSize: 16, fontWeight: 700, color: '#1e3a5f', marginBottom: 16 }}>ตำแหน่งและเงินเดือน/ค่าจ้าง</h3>
+
+      {/* Current Info Card */}
+      <div style={{ ...cardStyle, background: '#eff6ff', border: '1px solid #bfdbfe' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: '#1e3a5f' }}>ข้อมูลปัจจุบัน</span>
+          {history.length > 0 && (
+            <span style={{ fontSize: 12, color: '#888' }}>อัปเดตล่าสุด {fmtTime(history[0]?.changed_at)} โดย {history[0]?.changed_by_name || '-'}</span>
+          )}
+        </div>
+        {employment?.hire_date && (() => {
+          const hd = new Date(employment.hire_date);
+          const now = new Date();
+          let years = now.getFullYear() - hd.getFullYear();
+          let months = now.getMonth() - hd.getMonth();
+          let days = now.getDate() - hd.getDate();
+          if (days < 0) { months--; days += new Date(now.getFullYear(), now.getMonth(), 0).getDate(); }
+          if (months < 0) { years--; months += 12; }
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, padding: '8px 12px', background: '#fff', borderRadius: 8 }}>
+              <span style={{ fontSize: 16 }}>📅</span>
+              <span style={{ fontSize: 13, color: '#555' }}>เริ่มงาน {fmtDate(employment.hire_date)}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#1e3a5f' }}>({years} ปี {months} เดือน {days} วัน)</span>
+            </div>
+          );
+        })()}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px 24px' }}>
+          <div><div style={labelStyle}>แผนก</div><div style={valueStyle}>{employment?.department || '-'}</div></div>
+          <div><div style={labelStyle}>ตำแหน่ง</div><div style={valueStyle}>{employment?.position || '-'}</div></div>
+          <div><div style={labelStyle}>เงินเดือน/ค่าจ้าง</div><div style={{ ...valueStyle, color: '#1e3a5f', fontWeight: 700 }}>{fmtNum(salary?.salary)} บาท</div></div>
+          <div><div style={labelStyle}>ประกันสังคม</div><div style={{ ...valueStyle, color: '#059669' }}>{salary?.social_security_eligible ? fmtNum(salary?.social_security) + ' บาท/เดือน' : 'ไม่มี'}</div></div>
+          <div><div style={labelStyle}>หัก ณ ที่จ่าย</div><div style={{ ...valueStyle, color: '#dc2626' }}>{fmtNum(salary?.withholding_tax)} บาท/เดือน</div></div>
+          <div><div style={labelStyle}>รับสุทธิ (ประมาณ)</div><div style={{ ...valueStyle, color: '#1e3a5f', fontWeight: 700 }}>{fmtNum((parseFloat(salary?.salary || 0) - parseFloat(salary?.social_security || 0) - parseFloat(salary?.withholding_tax || 0)))} บาท</div></div>
+        </div>
+      </div>
+
+      {/* Filter + History */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 24, marginBottom: 16 }}>
+        <h3 style={{ fontSize: 16, fontWeight: 700, color: '#1e3a5f' }}>ประวัติการเปลี่ยนแปลง</h3>
+        <span style={{ fontSize: 13, color: '#888' }}>{filtered.length} รายการ</span>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        {filters.map(f => (
+          <button key={f.key} style={filterBtnStyle(filter === f.key)} onClick={() => setFilter(f.key)}>
+            {f.icon} {f.label}
+          </button>
+        ))}
+      </div>
+
+      {filtered.length === 0 ? (
+        <div style={{ textAlign: 'center', color: '#888', padding: 40 }}>ไม่มีประวัติ{filter !== 'all' ? `ในหมวด "${filters.find(f=>f.key===filter)?.label}"` : ''}</div>
+      ) : (
+        Object.entries(grouped).map(([date, items]) => (
+          <div key={date} style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#1e3a5f', marginBottom: 8, padding: '4px 12px', background: '#f0f2f5', borderRadius: 6, display: 'inline-block' }}>{date}</div>
+            {items.map(h => (
+              <div key={h.id} style={{ ...cardStyle, display: 'flex', alignItems: 'center', gap: 16, marginBottom: 8 }}>
+                <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#1e3a5f', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, flexShrink: 0 }}>
+                  {h.field_changed === 'เงินเดือน' ? '💰' : h.field_changed === 'ตำแหน่ง' ? '📌' : h.field_changed === 'แผนก' ? '🏢' : '📝'}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: '#333' }}>
+                    {h.field_changed}: <span style={{ color: '#dc2626', textDecoration: 'line-through' }}>{h.old_value || '-'}</span> → <span style={{ color: '#059669' }}>{h.new_value || '-'}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>โดย {h.changed_by_name || '-'} เมื่อ {fmtTime(h.changed_at)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+/* ========== NOTES TAB ========== */
+function NotesTab({ staffId }) {
+  const [notes, setNotes] = useState([]);
+  const [docs, setDocs] = useState([]);
+  const [newNote, setNewNote] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [docType, setDocType] = useState('สำเนาบัตรประชาชน');
+
+  useEffect(() => { load(); }, [staffId]);
+  const load = () => {
+    setLoading(true);
+    Promise.all([
+      getStaffNotes(staffId).then(r => setNotes(r.data || [])),
+      getStaffDocuments(staffId).then(r => setDocs(r.data || [])),
+    ]).catch(() => {}).finally(() => setLoading(false));
+  };
+  const handleAdd = async () => {
+    if (!newNote.trim()) return;
+    setSaving(true);
+    try { await createStaffNote(staffId, newNote); setNewNote(''); load(); }
+    catch (err) { alert(err.message); }
+    finally { setSaving(false); }
+  };
+
+  const handleUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      await uploadStaffDocument(staffId, file, docType);
+      load();
+    } catch (err) { alert(err.message); }
+    finally { setUploading(false); e.target.value = ''; }
+  };
+
+  const handleDeleteDoc = async (docId) => {
+    if (!confirm('ต้องการลบเอกสารนี้?')) return;
+    try { await deleteStaffDocument(staffId, docId); load(); }
+    catch (err) { alert(err.message); }
+  };
+
+  const fmtSize = (bytes) => {
+    if (!bytes) return '-';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>กำลังโหลด...</div>;
+
+  const docCategories = ['สำเนาบัตรประชาชน', 'สำเนาทะเบียนบ้าน', 'เอกสารอื่นๆ'];
+  const cardStyle = { background: '#f8fafc', borderRadius: 10, padding: '16px 20px', marginBottom: 16, border: '1px solid #e2e8f0' };
+
+  return (
+    <div style={{ padding: 24 }}>
+      {/* Documents Section */}
+      <h3 style={{ fontSize: 16, fontWeight: 700, color: '#1e3a5f', marginBottom: 16 }}>เอกสารสำคัญ</h3>
+
+      {docCategories.map(cat => {
+        const catDocs = docs.filter(d => d.document_type === cat);
+        return (
+          <div key={cat} style={{ ...cardStyle, marginBottom: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <span style={{ fontSize: 14, fontWeight: 700, color: '#333' }}>{cat}</span>
+              <label style={{ ...styles.btn('default'), fontSize: 12, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                {uploading && docType === cat ? '...' : '📎 แนบไฟล์'}
+                <input type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" style={{ display: 'none' }}
+                  onChange={(e) => { setDocType(cat); handleUpload(e); }} />
+              </label>
+            </div>
+            {catDocs.length === 0 ? (
+              <div style={{ padding: '20px', textAlign: 'center', color: '#aaa', background: '#fff', borderRadius: 8, border: '2px dashed #e2e8f0' }}>
+                <div style={{ fontSize: 13 }}>ยังไม่มีเอกสาร</div>
+              </div>
+            ) : (
+              catDocs.map(d => (
+                <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px', background: '#fff', borderRadius: 8, marginBottom: 6, border: '1px solid #e2e8f0' }}>
+                  <span style={{ fontSize: 20 }}>{d.mime_type?.includes('pdf') ? '📄' : d.mime_type?.includes('image') ? '🖼️' : '📎'}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#333' }}>{d.file_name}</div>
+                    <div style={{ fontSize: 11, color: '#888' }}>{fmtSize(d.file_size)} | อัพโหลดโดย {d.uploaded_by_name || '-'} | {new Date(d.uploaded_at).toLocaleDateString('th-TH')}</div>
+                  </div>
+                  <a href={`/api/staff/documents/file/${d.file_path}`} target="_blank" style={{ ...styles.btn('default'), fontSize: 12, textDecoration: 'none' }}>ดู</a>
+                  <button style={{ ...styles.btn('danger'), fontSize: 12, padding: '4px 10px' }} onClick={() => handleDeleteDoc(d.id)}>ลบ</button>
+                </div>
+              ))
+            )}
+          </div>
+        );
+      })}
+
+      {/* Notes Section */}
+      <h3 style={{ fontSize: 16, fontWeight: 700, color: '#1e3a5f', marginBottom: 16, marginTop: 24 }}>หมายเหตุ</h3>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+        <textarea style={{ ...styles.input, flex: 1, minHeight: 60 }} placeholder="เพิ่มหมายเหตุ..." value={newNote} onChange={e => setNewNote(e.target.value)} />
+        <button style={{ ...styles.btn('primary'), alignSelf: 'flex-end' }} onClick={handleAdd} disabled={saving}>{saving ? '...' : 'เพิ่ม'}</button>
+      </div>
+      {notes.length === 0 ? (
+        <div style={{ textAlign: 'center', color: '#888', padding: 20 }}>ยังไม่มีหมายเหตุ</div>
+      ) : (
+        notes.map(n => (
+          <div key={n.id} style={{ padding: '12px 16px', background: '#f8fafc', borderRadius: 8, marginBottom: 8 }}>
+            <div style={{ fontSize: 14 }}>{n.content}</div>
+            <div style={{ fontSize: 12, color: '#888', marginTop: 6 }}>โดย {n.created_by_name || '-'} | {new Date(n.created_at).toLocaleString('th-TH')}</div>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+/* ========== STAFF DETAIL ========== */
+function StaffDetailPage({ staffId, onBack, onRefresh }) {
+  const [staff, setStaff] = useState(null);
+  const [activeTab, setActiveTab] = useState('info');
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState({});
+  const [departments, setDepartments] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { loadStaff(); getDepartments().then(d => setDepartments(d.data || [])).catch(() => {}); }, [staffId]);
+
+  const loadStaff = async () => {
+    setLoading(true);
+    try { const data = await getStaff(staffId); setStaff(data.data); setEditForm(data.data); }
+    catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  };
+
+  const handleSave = async () => {
+    try { await updateStaff(staffId, editForm); setEditing(false); loadStaff(); onRefresh(); }
+    catch (err) { alert(err.message); }
+  };
+
+  const handleDelete = async () => {
+    if (!confirm('ต้องการปิดใช้งานพนักงานนี้?')) return;
+    try { await deleteStaff(staffId); onBack(); onRefresh(); }
+    catch (err) { alert(err.message); }
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>กำลังโหลด...</div>;
+  if (!staff) return <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>ไม่พบข้อมูล</div>;
+
+  const initials = (staff.first_name_en || staff.first_name_th || '?')[0].toUpperCase();
+  const tabList = [
+    { key: 'info', label: 'ข้อมูลส่วนตัว' },
+    { key: 'contact', label: 'ข้อมูลติดต่อ' },
+    { key: 'address', label: 'ที่อยู่' },
+    { key: 'employment', label: 'การจ้างงาน' },
+    { key: 'salary', label: 'เงินเดือน' },
+    { key: 'payslip', label: 'สลิปเงินเดือน' },
+    { key: 'history', label: 'ประวัติ' },
+    { key: 'notes', label: 'เอกสาร/หมายเหตุ' },
+  ];
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}><button onClick={onBack} style={{ ...styles.btn('default'), fontSize: 13 }}>← กลับ</button></div>
+      <div style={styles.card}>
+        <div style={styles.detailHeader}>
+          <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+            <div style={styles.detailAvatar}>{initials}</div>
+            <div>
+              <div style={styles.detailName}>{staff.title_th}{staff.first_name_th} {staff.last_name_th}</div>
+              <div style={styles.detailSub}>{staff.first_name_en} {staff.last_name_en} | {staff.employee_code}</div>
+              <div style={{ marginTop: 6 }}>
+                <span style={styles.badge(staff.status === 'active' ? 'green' : 'red')}>{staff.status}</span>
+                {staff.department_name && <span style={{ ...styles.badge('blue'), marginLeft: 6 }}>{staff.department_name}</span>}
+              </div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {activeTab === 'info' && !editing && <button style={styles.btn('primary')} onClick={() => setEditing(true)}>แก้ไข</button>}
+            {activeTab === 'info' && !editing && <button style={styles.btn('danger')} onClick={handleDelete}>ปิดใช้งาน</button>}
+          </div>
+        </div>
+
+        <div style={styles.tabs}>
+          {tabList.map(t => <button key={t.key} style={styles.tab(activeTab === t.key)} onClick={() => { setActiveTab(t.key); setEditing(false); }}>{t.label}</button>)}
+        </div>
+
+        {activeTab === 'info' && !editing && (
+          <div style={styles.detailGrid}>
+            <div><div style={styles.fieldLabel}>คำนำหน้า</div><div style={styles.fieldValue}>{staff.title_th || '-'}</div></div>
+            <div><div style={styles.fieldLabel}>ชื่อเล่น</div><div style={styles.fieldValue}>{staff.nickname_th || '-'}</div></div>
+            <div><div style={styles.fieldLabel}>ชื่อ (TH)</div><div style={styles.fieldValue}>{staff.first_name_th}</div></div>
+            <div><div style={styles.fieldLabel}>นามสกุล (TH)</div><div style={styles.fieldValue}>{staff.last_name_th}</div></div>
+            <div><div style={styles.fieldLabel}>ชื่อ (EN)</div><div style={styles.fieldValue}>{staff.first_name_en || '-'}</div></div>
+            <div><div style={styles.fieldLabel}>นามสกุล (EN)</div><div style={styles.fieldValue}>{staff.last_name_en || '-'}</div></div>
+            <div><div style={styles.fieldLabel}>เลขบัตรประชาชน</div><div style={styles.fieldValue}>{staff.id_card_number || '-'}</div></div>
+            <div><div style={styles.fieldLabel}>วันเกิด</div><div style={styles.fieldValue}>{staff.date_of_birth ? new Date(staff.date_of_birth).toLocaleDateString('th-TH') : '-'}</div></div>
+          </div>
+        )}
+
+        {activeTab === 'info' && editing && (
+          <div style={{ padding: 24 }}>
+            <div style={styles.formGrid}>
+              <div><label style={styles.label}>คำนำหน้า</label><select style={styles.input} value={editForm.title_th || ''} onChange={e => setEditForm(p => ({ ...p, title_th: e.target.value }))}><option>นาย</option><option>นาง</option><option>นางสาว</option></select></div>
+              <div><label style={styles.label}>ชื่อเล่น</label><input style={styles.input} value={editForm.nickname_th || ''} onChange={e => setEditForm(p => ({ ...p, nickname_th: e.target.value }))} /></div>
+              <div><label style={styles.label}>ชื่อ (TH)</label><input style={styles.input} value={editForm.first_name_th || ''} onChange={e => setEditForm(p => ({ ...p, first_name_th: e.target.value }))} /></div>
+              <div><label style={styles.label}>นามสกุล (TH)</label><input style={styles.input} value={editForm.last_name_th || ''} onChange={e => setEditForm(p => ({ ...p, last_name_th: e.target.value }))} /></div>
+              <div><label style={styles.label}>ชื่อ (EN)</label><input style={styles.input} value={editForm.first_name_en || ''} onChange={e => setEditForm(p => ({ ...p, first_name_en: e.target.value }))} /></div>
+              <div><label style={styles.label}>นามสกุล (EN)</label><input style={styles.input} value={editForm.last_name_en || ''} onChange={e => setEditForm(p => ({ ...p, last_name_en: e.target.value }))} /></div>
+              <div><label style={styles.label}>เลขบัตรประชาชน</label><input style={styles.input} value={editForm.id_card_number || ''} onChange={e => setEditForm(p => ({ ...p, id_card_number: e.target.value }))} /></div>
+              <div><label style={styles.label}>วันเกิด</label><input style={styles.input} type="date" value={editForm.date_of_birth ? editForm.date_of_birth.substring(0, 10) : ''} onChange={e => setEditForm(p => ({ ...p, date_of_birth: e.target.value }))} /></div>
+            </div>
+            <div style={{ display: 'flex', gap: 10, marginTop: 20, justifyContent: 'flex-end' }}>
+              <button style={styles.btn('default')} onClick={() => { setEditing(false); setEditForm(staff); }}>ยกเลิก</button>
+              <button style={styles.btn('success')} onClick={handleSave}>บันทึก</button>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'contact' && <EditableTab staffId={staffId} fetchFn={getStaffContact} saveFn={saveStaffContact} fields={contactFields} title="ข้อมูลติดต่อ" />}
+        {activeTab === 'address' && <EditableTab staffId={staffId} fetchFn={getStaffAddress} saveFn={saveStaffAddress} fields={addressFields} title="ที่อยู่ตามบัตรประชาชน" />}
+        {activeTab === 'employment' && <EditableTab staffId={staffId} fetchFn={getStaffEmployment} saveFn={saveStaffEmployment} fields={employmentFields} title="ข้อมูลการจ้างงาน" />}
+        {activeTab === 'salary' && <SalaryTab staffId={staffId} />}
+        {activeTab === 'history' && <HistoryTab staffId={staffId} />}
+        {activeTab === 'payslip' && <PayslipTab staffId={staffId} />}
+        {activeTab === 'notes' && <NotesTab staffId={staffId} />}
+      </div>
+    </div>
+  );
+}
+
+/* ========== MAIN APP ========== */
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [page, setPage] = useState('dashboard');
+  const [staffList, setStaffList] = useState([]);
+  const [selectedStaffId, setSelectedStaffId] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  useEffect(() => { const s = document.createElement('style'); s.textContent = styles.global; document.head.appendChild(s); return () => s.remove(); }, []);
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (token) { getMe().then(data => setUser(data.user)).catch(() => localStorage.removeItem('token')).finally(() => setAuthChecked(true)); }
+    else { setAuthChecked(true); }
+  }, []);
+
+  const loadStaff = useCallback(async () => {
+    try { const data = await getStaffList({ limit: 100 }); setStaffList(data.data || []); }
+    catch (err) { console.error('Load staff error:', err); }
+  }, []);
+
+  useEffect(() => { if (user) loadStaff(); }, [user, loadStaff]);
+
+  const handleLogout = () => { localStorage.removeItem('token'); setUser(null); setPage('dashboard'); setSelectedStaffId(null); };
+
+  if (!authChecked) return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', color: '#888' }}>กำลังโหลด...</div>;
+  if (!user) return <LoginPage onLogin={setUser} />;
+
+  return (
+    <div style={styles.layout}>
+      <Sidebar active={page} onNavigate={(p) => { setPage(p); setSelectedStaffId(null); }} user={user} onLogout={handleLogout} />
+      <main style={styles.main}>
+        {page === 'dashboard' && <DashboardPage staffList={staffList} />}
+        {page === 'staff' && !selectedStaffId && <StaffListPage staffList={staffList} onSelect={setSelectedStaffId} onRefresh={loadStaff} />}
+        {page === 'staff' && selectedStaffId && <StaffDetailPage staffId={selectedStaffId} onBack={() => setSelectedStaffId(null)} onRefresh={loadStaff} />}
+        {page === 'payroll' && <PayrollPage />}
+        {page === 'withholding' && <WithholdingTaxPage />}
+        {page === 'users' && <UserManagementPage staffList={staffList} />}
+      </main>
+    </div>
+  );
+}
+
+/* ========== PAYSLIP TAB (Staff Detail) ========== */
+function PayslipTab({ staffId }) {
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    getStaffPayroll(staffId).then(r => setRecords(r.data || [])).catch(() => {}).finally(() => setLoading(false));
+  }, [staffId]);
+
+  const fmtNum = (v) => v ? parseFloat(v).toLocaleString('th-TH') : '0';
+  const months = ['', 'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>กำลังโหลด...</div>;
+  return (
+    <div style={{ padding: 24 }}>
+      <h3 style={{ fontSize: 16, fontWeight: 700, color: '#1e3a5f', marginBottom: 16 }}>ประวัติเงินเดือน</h3>
+      {records.length === 0 ? (
+        <div style={{ textAlign: 'center', color: '#888', padding: 40 }}>ยังไม่มีข้อมูล</div>
+      ) : (
+        <table style={styles.table}>
+          <thead><tr>
+            <th style={styles.th}>เดือน</th><th style={styles.th}>เงินเดือน</th><th style={styles.th}>OT</th><th style={styles.th}>โบนัส</th>
+            <th style={styles.th}>ประกันสังคม</th><th style={styles.th}>ภาษี</th><th style={styles.th}>หักอื่นๆ</th><th style={styles.th}>รับสุทธิ</th><th style={styles.th}>สถานะ</th>
+          </tr></thead>
+          <tbody>{records.map(r => (
+            <tr key={r.id}>
+              <td style={styles.td}>{months[r.month]} {r.year + 543}</td>
+              <td style={styles.td}>{fmtNum(r.salary)}</td>
+              <td style={styles.td}>{fmtNum(r.overtime)}</td>
+              <td style={styles.td}>{fmtNum(r.bonus)}</td>
+              <td style={styles.td}>{fmtNum(r.social_security)}</td>
+              <td style={styles.td}>{fmtNum(r.withholding_tax)}</td>
+              <td style={styles.td}>{fmtNum(r.other_deduction)}</td>
+              <td style={{ ...styles.td, fontWeight: 700, color: '#1e3a5f' }}>{fmtNum(r.net_pay)}</td>
+              <td style={styles.td}><span style={styles.badge(r.status === 'approved' ? 'green' : 'default')}>{r.status === 'approved' ? 'อนุมัติ' : 'ร่าง'}</span></td>
+            </tr>
+          ))}</tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+/* ========== PAYROLL PAGE ========== */
+function PayrollPage() {
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [editId, setEditId] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [showAddStaff, setShowAddStaff] = useState(false);
+  const [staffList, setStaffList] = useState([]);
+
+  const monthNames = ['', 'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+  const fmtNum = (v) => v ? parseFloat(v).toLocaleString('th-TH') : '0';
+
+  const load = async () => {
+    setLoading(true);
+    try { const res = await getPayroll(year, month); setRecords(res.data || []); }
+    catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, [year, month]);
+
+  const handleGenerate = async () => {
+    setMsg('');
+    try { const res = await generatePayroll(year, month); setMsg(res.message); load(); }
+    catch (err) { setMsg('Error: ' + err.message); }
+  };
+
+  const handleApprove = async () => {
+    if (!confirm(`ยืนยันอนุมัติเงินเดือน ${monthNames[month]} ${year + 543}?`)) return;
+    setMsg('');
+    try { const res = await approvePayroll(year, month); setMsg(res.message); load(); }
+    catch (err) { setMsg('Error: ' + err.message); }
+  };
+
+  const handleDeleteMonth = async () => {
+    if (!confirm(`ยืนยันลบรายการเงินเดือน ${monthNames[month]} ${year + 543} ทั้งหมด?`)) return;
+    setMsg('');
+    try {
+      const res = await fetch(`/api/payroll/month/${year}/${month}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setMsg(data.message); load();
+    } catch (err) { setMsg('Error: ' + err.message); }
+  };
+
+  const handleDeleteSingle = async (id) => {
+    if (!confirm('ยืนยันลบรายการนี้?')) return;
+    try {
+      const res = await fetch(`/api/payroll/${id}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      load();
+    } catch (err) { alert(err.message); }
+  };
+
+  const handleAddStaff = async (staffId) => {
+    try {
+      const res = await fetch('/api/payroll/add-single', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.getItem('token')}` }, body: JSON.stringify({ staff_id: staffId, year, month }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setMsg(data.message); setShowAddStaff(false); load();
+    } catch (err) { alert(err.message); }
+  };
+
+  const openAddStaff = async () => {
+    try { const res = await getStaffList({ limit: 100 }); setStaffList(res.data || []); setShowAddStaff(true); }
+    catch (err) { alert(err.message); }
+  };
+
+  const startEdit = (r) => {
+    setEditId(r.id);
+    setEditForm({ bonus: r.bonus || 0, overtime: r.overtime || 0, other_income: r.other_income || 0, other_deduction: r.other_deduction || 0 });
+  };
+
+  const saveEdit = async () => {
+    try {
+      await updatePayrollItem(editId, editForm);
+      setEditId(null); load();
+    } catch (err) { alert(err.message); }
+  };
+
+  const totalSalary = records.reduce((s, r) => s + parseFloat(r.salary || 0), 0);
+  const totalSS = records.reduce((s, r) => s + parseFloat(r.social_security || 0), 0);
+  const totalTax = records.reduce((s, r) => s + parseFloat(r.withholding_tax || 0), 0);
+  const totalNet = records.reduce((s, r) => s + parseFloat(r.net_pay || 0), 0);
+  const hasDraft = records.some(r => r.status === 'draft');
+
+  return (
+    <div>
+      <div style={styles.pageHeader}>
+        <h1 style={styles.pageTitle}>Payroll - รายการเงินเดือน</h1>
+      </div>
+
+      {/* Controls */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select style={{ ...styles.input, width: 160 }} value={month} onChange={e => setMonth(parseInt(e.target.value))}>
+          {monthNames.slice(1).map((m, i) => <option key={i+1} value={i+1}>{m}</option>)}
+        </select>
+        <select style={{ ...styles.input, width: 120 }} value={year} onChange={e => setYear(parseInt(e.target.value))}>
+          {[now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1].map(y => <option key={y} value={y}>{y + 543}</option>)}
+        </select>
+        <button style={styles.btn('primary')} onClick={handleGenerate}>สร้างรายการเงินเดือน</button>
+        {records.length > 0 && hasDraft && <button style={styles.btn('success')} onClick={handleApprove}>อนุมัติทั้งหมด</button>}
+        {records.length > 0 && <button style={styles.btn('default')} onClick={openAddStaff}>+ เพิ่มพนักงาน</button>}
+        {records.length > 0 && hasDraft && <button style={styles.btn('danger')} onClick={handleDeleteMonth}>ลบทั้งเดือน</button>}
+      </div>
+
+      {msg && <div style={msg.startsWith('Error') ? styles.error : styles.success}>{msg}</div>}
+
+      {/* Summary Cards */}
+      {records.length > 0 && (
+        <div style={styles.statsRow}>
+          <div style={styles.statCard}><div style={styles.statValue}>{records.length}</div><div style={styles.statLabel}>จำนวนพนักงาน</div></div>
+          <div style={styles.statCard}><div style={styles.statValue}>{fmtNum(totalSalary)}</div><div style={styles.statLabel}>เงินเดือนรวม</div></div>
+          <div style={styles.statCard}><div style={styles.statValue}>{fmtNum(totalTax)}</div><div style={styles.statLabel}>ภาษีหัก ณ ที่จ่าย</div></div>
+          <div style={styles.statCard}><div style={styles.statValue}>{fmtNum(totalNet)}</div><div style={styles.statLabel}>จ่ายสุทธิรวม</div></div>
+        </div>
+      )}
+
+      {/* Table */}
+      <div style={styles.card}>
+        {loading ? (
+          <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>กำลังโหลด...</div>
+        ) : records.length === 0 ? (
+          <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>
+            <div style={{ fontSize: 40, marginBottom: 12 }}>💰</div>
+            <div>ยังไม่มีรายการเงินเดือน {monthNames[month]} {year + 543}</div>
+            <div style={{ fontSize: 13, color: '#aaa', marginTop: 8 }}>กดปุ่ม "สร้างรายการเงินเดือน" เพื่อดึงข้อมูลจากระบบ</div>
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={styles.table}>
+              <thead><tr>
+                <th style={styles.th}>รหัส</th><th style={styles.th}>ชื่อ-นามสกุล</th><th style={styles.th}>แผนก</th>
+                <th style={styles.th}>เงินเดือน</th><th style={styles.th}>OT</th><th style={styles.th}>โบนัส</th><th style={styles.th}>รายได้อื่น</th>
+                <th style={styles.th}>ปกส.</th><th style={styles.th}>ภาษี</th><th style={styles.th}>หักอื่นๆ</th>
+                <th style={styles.th}>รับสุทธิ</th><th style={styles.th}>สถานะ</th><th style={styles.th}>จัดการ</th>
+              </tr></thead>
+              <tbody>
+                {records.map(r => (
+                  <tr key={r.id}>
+                    <td style={styles.td}>{r.employee_code}</td>
+                    <td style={styles.td}>{r.title_th}{r.first_name_th} {r.last_name_th}</td>
+                    <td style={styles.td}>{r.department_name || '-'}</td>
+                    <td style={styles.td}>{fmtNum(r.salary)}</td>
+                    <td style={styles.td}>{editId === r.id ? <input type="number" style={{ ...styles.input, width: 80, padding: 4 }} value={editForm.overtime} onChange={e => setEditForm(p => ({...p, overtime: e.target.value}))} /> : fmtNum(r.overtime)}</td>
+                    <td style={styles.td}>{editId === r.id ? <input type="number" style={{ ...styles.input, width: 80, padding: 4 }} value={editForm.bonus} onChange={e => setEditForm(p => ({...p, bonus: e.target.value}))} /> : fmtNum(r.bonus)}</td>
+                    <td style={styles.td}>{editId === r.id ? <input type="number" style={{ ...styles.input, width: 80, padding: 4 }} value={editForm.other_income} onChange={e => setEditForm(p => ({...p, other_income: e.target.value}))} /> : fmtNum(r.other_income)}</td>
+                    <td style={styles.td}>{fmtNum(r.social_security)}</td>
+                    <td style={styles.td}>{fmtNum(r.withholding_tax)}</td>
+                    <td style={styles.td}>{editId === r.id ? <input type="number" style={{ ...styles.input, width: 80, padding: 4 }} value={editForm.other_deduction} onChange={e => setEditForm(p => ({...p, other_deduction: e.target.value}))} /> : fmtNum(r.other_deduction)}</td>
+                    <td style={{ ...styles.td, fontWeight: 700, color: '#1e3a5f' }}>{fmtNum(r.net_pay)}</td>
+                    <td style={styles.td}><span style={styles.badge(r.status === 'approved' ? 'green' : 'default')}>{r.status === 'approved' ? 'อนุมัติ' : 'ร่าง'}</span></td>
+                    <td style={styles.td}>
+                      {r.status === 'draft' && editId !== r.id && (
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <button style={{ ...styles.btn('default'), fontSize: 12, padding: '4px 10px' }} onClick={() => startEdit(r)}>แก้ไข</button>
+                          <button style={{ ...styles.btn('danger'), fontSize: 12, padding: '4px 10px' }} onClick={() => handleDeleteSingle(r.id)}>ลบ</button>
+                        </div>
+                      )}
+                      {editId === r.id && (
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <button style={{ ...styles.btn('success'), fontSize: 12, padding: '4px 8px' }} onClick={saveEdit}>บันทึก</button>
+                          <button style={{ ...styles.btn('default'), fontSize: 12, padding: '4px 8px' }} onClick={() => setEditId(null)}>ยกเลิก</button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                <tr style={{ background: '#f0f2f5', fontWeight: 700 }}>
+                  <td style={styles.td} colSpan={3}>รวม</td>
+                  <td style={styles.td}>{fmtNum(totalSalary)}</td>
+                  <td style={styles.td}>{fmtNum(records.reduce((s,r)=>s+parseFloat(r.overtime||0),0))}</td>
+                  <td style={styles.td}>{fmtNum(records.reduce((s,r)=>s+parseFloat(r.bonus||0),0))}</td>
+                  <td style={styles.td}>{fmtNum(records.reduce((s,r)=>s+parseFloat(r.other_income||0),0))}</td>
+                  <td style={styles.td}>{fmtNum(totalSS)}</td>
+                  <td style={styles.td}>{fmtNum(totalTax)}</td>
+                  <td style={styles.td}>{fmtNum(records.reduce((s,r)=>s+parseFloat(r.other_deduction||0),0))}</td>
+                  <td style={{ ...styles.td, color: '#1e3a5f' }}>{fmtNum(totalNet)}</td>
+                  <td style={styles.td}></td><td style={styles.td}></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Add Staff Modal */}
+      {showAddStaff && (
+        <div style={styles.overlay} onClick={() => setShowAddStaff(false)}>
+          <div style={{ ...styles.modal, width: 480 }} onClick={e => e.stopPropagation()}>
+            <div style={styles.modalHeader}><span style={styles.modalTitle}>เพิ่มพนักงานในรายการเดือนนี้</span><button onClick={() => setShowAddStaff(false)} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button></div>
+            <div style={styles.modalBody}>
+              <div style={{ maxHeight: 400, overflow: 'auto' }}>
+                {staffList.filter(s => s.status === 'active' && !records.find(r => r.staff_id === s.id)).map(s => (
+                  <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid #f0f2f5' }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 600 }}>{s.employee_code} - {s.first_name_th} {s.last_name_th}</div>
+                      <div style={{ fontSize: 12, color: '#888' }}>{s.department_name || '-'} | {s.position || '-'}</div>
+                    </div>
+                    <button style={{ ...styles.btn('primary'), fontSize: 12, padding: '4px 12px' }} onClick={() => handleAddStaff(s.id)}>เพิ่ม</button>
+                  </div>
+                ))}
+                {staffList.filter(s => s.status === 'active' && !records.find(r => r.staff_id === s.id)).length === 0 && (
+                  <div style={{ textAlign: 'center', color: '#888', padding: 20 }}>พนักงานทุกคนมีรายการแล้ว</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ========== USER MANAGEMENT PAGE ========== */
+function UserManagementPage({ staffList }) {
+  const [activeTab, setActiveTab] = useState('users');
+  const [users, setUsers] = useState([]);
+  const [roles, setRoles] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [editUser, setEditUser] = useState(null);
+  const [resetPwUser, setResetPwUser] = useState(null);
+
+  useEffect(() => { load(); }, []);
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [u, r] = await Promise.all([getUsers(), getRoles()]);
+      setUsers(u.data || []);
+      setRoles(r.data || []);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>กำลังโหลด...</div>;
+
+  return (
+    <div>
+      <div style={styles.pageHeader}>
+        <h1 style={styles.pageTitle}>User Management</h1>
+        {activeTab === 'users' && <button style={styles.btn('primary')} onClick={() => setShowCreate(true)}>+ เพิ่มผู้ใช้</button>}
+      </div>
+      <div style={styles.card}>
+        <div style={styles.tabs}>
+          <button style={styles.tab(activeTab === 'users')} onClick={() => setActiveTab('users')}>👥 ผู้ใช้งาน</button>
+          <button style={styles.tab(activeTab === 'roles')} onClick={() => setActiveTab('roles')}>🛡️ Roles & Permissions</button>
+        </div>
+
+        {activeTab === 'users' && (
+          <table style={styles.table}>
+            <thead><tr>
+              <th style={styles.th}>Username</th><th style={styles.th}>พนักงาน</th><th style={styles.th}>Email</th><th style={styles.th}>Role</th><th style={styles.th}>สถานะ</th><th style={styles.th}>Login ล่าสุด</th><th style={styles.th}>จัดการ</th>
+            </tr></thead>
+            <tbody>
+              {users.map(u => (
+                <tr key={u.id}>
+                  <td style={styles.td}><span style={{ fontWeight: 600, color: '#1e3a5f' }}>{u.username}</span></td>
+                  <td style={styles.td}>{u.first_name_th ? `${u.first_name_th} ${u.last_name_th}` : '-'}</td>
+                  <td style={styles.td}>{u.email || '-'}</td>
+                  <td style={styles.td}><span style={styles.badge('blue')}>{u.role_name}</span></td>
+                  <td style={styles.td}><span style={styles.badge(u.is_active ? 'green' : 'red')}>{u.is_active ? 'Active' : 'Inactive'}</span></td>
+                  <td style={styles.td}>{u.last_login ? new Date(u.last_login).toLocaleString('th-TH') : 'ยังไม่เคย'}</td>
+                  <td style={styles.td}>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button style={{ ...styles.btn('default'), fontSize: 12, padding: '4px 10px' }} onClick={() => setEditUser(u)}>แก้ไข</button>
+                      <button style={{ ...styles.btn('default'), fontSize: 12, padding: '4px 10px' }} onClick={() => setResetPwUser(u)}>รีเซ็ตรหัส</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        {activeTab === 'roles' && <RolesPermissionsTab roles={roles} />}
+      </div>
+      {showCreate && <CreateUserModal roles={roles} staffList={staffList} onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); load(); }} />}
+      {editUser && <EditUserModal user={editUser} roles={roles} staffList={staffList} onClose={() => setEditUser(null)} onSaved={() => { setEditUser(null); load(); }} />}
+      {resetPwUser && <ResetPasswordModal user={resetPwUser} onClose={() => setResetPwUser(null)} onDone={() => { setResetPwUser(null); }} />}
+    </div>
+  );
+}
+
+/* ========== ROLES & PERMISSIONS TAB ========== */
+function RolesPermissionsTab({ roles }) {
+  const [selectedRole, setSelectedRole] = useState(null);
+  const [permissions, setPermissions] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  const loadPerms = async (roleId) => {
+    setLoading(true); setMsg('');
+    try {
+      const res = await getRolePermissions(roleId);
+      setPermissions(res.data || []);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  };
+
+  const handleSelectRole = (role) => {
+    setSelectedRole(role);
+    loadPerms(role.id);
+  };
+
+  const togglePerm = (permId) => {
+    setPermissions(prev => prev.map(p => p.id === permId ? { ...p, granted: !p.granted } : p));
+  };
+
+  const toggleModule = (module) => {
+    const modulePerms = permissions.filter(p => p.module === module);
+    const allGranted = modulePerms.every(p => p.granted);
+    setPermissions(prev => prev.map(p => p.module === module ? { ...p, granted: !allGranted } : p));
+  };
+
+  const handleSave = async () => {
+    setSaving(true); setMsg('');
+    try {
+      const granted = permissions.filter(p => p.granted).map(p => p.id);
+      await saveRolePermissions(selectedRole.id, granted);
+      setMsg('บันทึกสิทธิ์สำเร็จ');
+      setTimeout(() => setMsg(''), 3000);
+    } catch (err) { setMsg('Error: ' + err.message); }
+    finally { setSaving(false); }
+  };
+
+  // Group permissions by module
+  const modules = [...new Set(permissions.map(p => p.module))];
+  const actions = ['view', 'create', 'edit', 'delete', 'approve', 'export'];
+  const actionLabels = { view: 'ดู', create: 'สร้าง', edit: 'แก้ไข', delete: 'ลบ', approve: 'อนุมัติ', export: 'ส่งออก' };
+
+  return (
+    <div style={{ padding: 24 }}>
+      <div style={{ display: 'flex', gap: 24 }}>
+        {/* Role List */}
+        <div style={{ width: 200, flexShrink: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#1e3a5f', marginBottom: 12 }}>เลือก Role</div>
+          {roles.map(r => (
+            <div key={r.id} onClick={() => handleSelectRole(r)}
+              style={{ padding: '10px 14px', borderRadius: 8, cursor: 'pointer', marginBottom: 4, fontSize: 14,
+                background: selectedRole?.id === r.id ? '#1e3a5f' : '#f8fafc',
+                color: selectedRole?.id === r.id ? '#fff' : '#333',
+                fontWeight: selectedRole?.id === r.id ? 600 : 400,
+                border: '1px solid ' + (selectedRole?.id === r.id ? '#1e3a5f' : '#e2e8f0') }}>
+              {r.name}
+            </div>
+          ))}
+        </div>
+
+        {/* Permissions Grid */}
+        <div style={{ flex: 1 }}>
+          {!selectedRole ? (
+            <div style={{ textAlign: 'center', color: '#888', padding: 40 }}>เลือก Role จากด้านซ้ายเพื่อจัดการสิทธิ์</div>
+          ) : loading ? (
+            <div style={{ textAlign: 'center', color: '#888', padding: 40 }}>กำลังโหลด...</div>
+          ) : (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <span style={{ fontSize: 16, fontWeight: 700, color: '#1e3a5f' }}>สิทธิ์ของ: {selectedRole.name}</span>
+                <button style={{ ...styles.btn('success'), opacity: saving ? 0.7 : 1 }} onClick={handleSave} disabled={saving}>{saving ? 'กำลังบันทึก...' : 'บันทึกสิทธิ์'}</button>
+              </div>
+              {msg && <div style={msg.startsWith('Error') ? styles.error : styles.success}>{msg}</div>}
+              <table style={{ ...styles.table, fontSize: 13 }}>
+                <thead><tr>
+                  <th style={{ ...styles.th, width: 150 }}>Module</th>
+                  {actions.map(a => <th key={a} style={{ ...styles.th, textAlign: 'center', width: 70 }}>{actionLabels[a]}</th>)}
+                  <th style={{ ...styles.th, textAlign: 'center', width: 70 }}>ทั้งหมด</th>
+                </tr></thead>
+                <tbody>
+                  {modules.map(mod => {
+                    const modulePerms = permissions.filter(p => p.module === mod);
+                    const allGranted = modulePerms.every(p => p.granted);
+                    return (
+                      <tr key={mod}>
+                        <td style={{ ...styles.td, fontWeight: 600 }}>{mod}</td>
+                        {actions.map(act => {
+                          const perm = permissions.find(p => p.module === mod && p.action === act);
+                          return (
+                            <td key={act} style={{ ...styles.td, textAlign: 'center' }}>
+                              {perm ? (
+                                <input type="checkbox" checked={perm.granted} onChange={() => togglePerm(perm.id)} style={{ width: 18, height: 18, cursor: 'pointer' }} />
+                              ) : <span style={{ color: '#ddd' }}>-</span>}
+                            </td>
+                          );
+                        })}
+                        <td style={{ ...styles.td, textAlign: 'center' }}>
+                          <input type="checkbox" checked={allGranted} onChange={() => toggleModule(mod)} style={{ width: 18, height: 18, cursor: 'pointer' }} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ========== CREATE USER MODAL ========== */
+function CreateUserModal({ roles, staffList, onClose, onCreated }) {
+  const [form, setForm] = useState({ username: '', email: '', password: '', role_id: '', staff_id: '' });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const h = (k, v) => setForm(p => ({ ...p, [k]: v }));
+  const handleSubmit = async () => {
+    setError('');
+    if (!form.username || !form.password || !form.role_id) return setError('กรุณากรอก Username, Password และเลือก Role');
+    if (form.password.length < 6) return setError('Password ต้องมีอย่างน้อย 6 ตัวอักษร');
+    setLoading(true);
+    try { await createUser({ ...form, role_id: parseInt(form.role_id), staff_id: form.staff_id ? parseInt(form.staff_id) : null }); onCreated(); }
+    catch (err) { setError(err.message); } finally { setLoading(false); }
+  };
+  return (
+    <div style={styles.overlay} onClick={onClose}><div style={styles.modal} onClick={e => e.stopPropagation()}>
+      <div style={styles.modalHeader}><span style={styles.modalTitle}>เพิ่มผู้ใช้ใหม่</span><button onClick={onClose} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button></div>
+      <div style={styles.modalBody}>
+        {error && <div style={styles.error}>{error}</div>}
+        <div style={styles.formGrid}>
+          <div><label style={styles.label}>Username *</label><input style={styles.input} value={form.username} onChange={e => h('username', e.target.value)} /></div>
+          <div><label style={styles.label}>Email</label><input style={styles.input} type="email" value={form.email} onChange={e => h('email', e.target.value)} /></div>
+          <div><label style={styles.label}>Password *</label><input style={styles.input} type="password" value={form.password} onChange={e => h('password', e.target.value)} placeholder="อย่างน้อย 6 ตัว" /></div>
+          <div><label style={styles.label}>Role *</label>
+            <select style={styles.input} value={form.role_id} onChange={e => h('role_id', e.target.value)}>
+              <option value="">-- เลือก Role --</option>
+              {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          </div>
+          <div style={{ gridColumn: '1 / -1' }}><label style={styles.label}>เชื่อมกับพนักงาน</label>
+            <select style={styles.input} value={form.staff_id} onChange={e => h('staff_id', e.target.value)}>
+              <option value="">-- ไม่เชื่อม --</option>
+              {staffList.map(s => <option key={s.id} value={s.id}>{s.employee_code} - {s.first_name_th} {s.last_name_th}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+      <div style={styles.modalFooter}><button style={styles.btn('default')} onClick={onClose}>ยกเลิก</button><button style={{ ...styles.btn('primary'), opacity: loading ? 0.7 : 1 }} onClick={handleSubmit} disabled={loading}>{loading ? 'กำลังบันทึก...' : 'บันทึก'}</button></div>
+    </div></div>
+  );
+}
+
+/* ========== EDIT USER MODAL ========== */
+function EditUserModal({ user, roles, staffList, onClose, onSaved }) {
+  const [form, setForm] = useState({ email: user.email || '', role_id: String(user.role_id), is_active: user.is_active, staff_id: user.staff_id ? String(user.staff_id) : '' });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const h = (k, v) => setForm(p => ({ ...p, [k]: v }));
+  const handleSubmit = async () => {
+    setError('');
+    if (!form.role_id) return setError('กรุณาเลือก Role');
+    setLoading(true);
+    try { await updateUser(user.id, { ...form, role_id: parseInt(form.role_id), staff_id: form.staff_id ? parseInt(form.staff_id) : null }); onSaved(); }
+    catch (err) { setError(err.message); } finally { setLoading(false); }
+  };
+  return (
+    <div style={styles.overlay} onClick={onClose}><div style={styles.modal} onClick={e => e.stopPropagation()}>
+      <div style={styles.modalHeader}><span style={styles.modalTitle}>แก้ไขผู้ใช้: {user.username}</span><button onClick={onClose} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button></div>
+      <div style={styles.modalBody}>
+        {error && <div style={styles.error}>{error}</div>}
+        <div style={styles.formGrid}>
+          <div><label style={styles.label}>Username</label><div style={{ ...styles.input, background: '#f3f4f6', color: '#888' }}>{user.username}</div></div>
+          <div><label style={styles.label}>Email</label><input style={styles.input} type="email" value={form.email} onChange={e => h('email', e.target.value)} /></div>
+          <div><label style={styles.label}>Role *</label>
+            <select style={styles.input} value={form.role_id} onChange={e => h('role_id', e.target.value)}>
+              {roles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+            </select>
+          </div>
+          <div><label style={styles.label}>สถานะ</label>
+            <select style={styles.input} value={String(form.is_active)} onChange={e => h('is_active', e.target.value === 'true')}>
+              <option value="true">Active</option><option value="false">Inactive</option>
+            </select>
+          </div>
+          <div style={{ gridColumn: '1 / -1' }}><label style={styles.label}>เชื่อมกับพนักงาน</label>
+            <select style={styles.input} value={form.staff_id} onChange={e => h('staff_id', e.target.value)}>
+              <option value="">-- ไม่เชื่อม --</option>
+              {staffList.map(s => <option key={s.id} value={s.id}>{s.employee_code} - {s.first_name_th} {s.last_name_th}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+      <div style={styles.modalFooter}><button style={styles.btn('default')} onClick={onClose}>ยกเลิก</button><button style={{ ...styles.btn('success'), opacity: loading ? 0.7 : 1 }} onClick={handleSubmit} disabled={loading}>{loading ? 'กำลังบันทึก...' : 'บันทึก'}</button></div>
+    </div></div>
+  );
+}
+
+/* ========== RESET PASSWORD MODAL ========== */
+function ResetPasswordModal({ user, onClose, onDone }) {
+  const [pw, setPw] = useState('');
+  const [msg, setMsg] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const handleSubmit = async () => {
+    setError(''); setMsg('');
+    if (!pw || pw.length < 6) return setError('Password ต้องมีอย่างน้อย 6 ตัวอักษร');
+    setLoading(true);
+    try { await resetUserPassword(user.id, pw); setMsg('รีเซ็ตรหัสผ่านสำเร็จ'); setPw(''); setTimeout(onDone, 1500); }
+    catch (err) { setError(err.message); } finally { setLoading(false); }
+  };
+  return (
+    <div style={styles.overlay} onClick={onClose}><div style={{ ...styles.modal, width: 400 }} onClick={e => e.stopPropagation()}>
+      <div style={styles.modalHeader}><span style={styles.modalTitle}>รีเซ็ตรหัสผ่าน: {user.username}</span><button onClick={onClose} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button></div>
+      <div style={styles.modalBody}>
+        {error && <div style={styles.error}>{error}</div>}
+        {msg && <div style={styles.success}>{msg}</div>}
+        <div><label style={styles.label}>รหัสผ่านใหม่ *</label><input style={styles.input} type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="อย่างน้อย 6 ตัว" /></div>
+      </div>
+      <div style={styles.modalFooter}><button style={styles.btn('default')} onClick={onClose}>ยกเลิก</button><button style={{ ...styles.btn('danger'), opacity: loading ? 0.7 : 1 }} onClick={handleSubmit} disabled={loading}>{loading ? '...' : 'รีเซ็ตรหัสผ่าน'}</button></div>
+    </div></div>
+  );
+}
+
+/* ========== WITHHOLDING TAX (50 ทวิ) ========== */
+function WithholdingTaxPage() {
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [filterYear, setFilterYear] = useState(new Date().getFullYear());
+  const [filterStatus, setFilterStatus] = useState('');
+  const [error, setError] = useState('');
+  const [form, setForm] = useState(getEmptyWhtForm());
+
+  const DEFAULT_PAYER = {
+    payer_name: 'บริษัท ไอเดีย เฮ้าส์เซ็นเตอร์ จำกัด (สำนักงานใหญ่)',
+    payer_tax_id: '0105556022070',
+    payer_address: 'เลขที่ 80 อาคาร เค.เอ.เอ็น.เพลส ห้องเลขที่ 104 ชั้น 1 ซ.นราธิวาสราชนครินทร์ 8 แขวงทุ่งวัดดอน เขตสาทร กรุงเทพฯ 10120',
+  };
+  const PND_FORMS = ['ภ.ง.ด.1ก','ภ.ง.ด.1ก พิเศษ','ภ.ง.ด.2','ภ.ง.ด.3','ภ.ง.ด.2ก','ภ.ง.ด.3ก','ภ.ง.ด.53'];
+  const INCOME_TYPES = ['40(1)','40(2)','40(3)','40(4)ก','40(4)ข','ม.3 เตรส','อื่นๆ'];
+  const ST_LABEL = { draft:'ร่าง', issued:'ออกแล้ว', cancelled:'ยกเลิก' };
+  const ST_COLOR = { draft:'default', issued:'green', cancelled:'red' };
+
+  function getEmptyWhtForm() {
+    return { payer_name:'บริษัท ไอเดีย เฮ้าส์เซ็นเตอร์ จำกัด (สำนักงานใหญ่)', payer_tax_id:'0105556022070',
+      payer_address:'เลขที่ 80 อาคาร เค.เอ.เอ็น.เพลส ห้องเลขที่ 104 ชั้น 1 ซ.นราธิวาสราชนครินทร์ 8 แขวงทุ่งวัดดอน เขตสาทร กรุงเทพฯ 10120',
+      tax_year: new Date().getFullYear(), payee_name:'', payee_tax_id:'', payee_address:'',
+      pnd_form:'ภ.ง.ด.3', pnd_seq:1, income_type:'ม.3 เตรส', income_desc:'',
+      total_income:'', total_tax:'', fund_gpf:0, fund_sso:0, fund_pvf:0, withhold_method:1,
+	items:[{ pay_date:'', description:'', income_amount:'', tax_amount:'', pnd_form:'ภ.ง.ด.3', income_type:'ม.3 เตรส' }] };
+  }
+
+  const whtApi = async (url, opts={}) => {
+    const token = localStorage.getItem('token');
+    const res = await fetch(url, { ...opts, headers:{ 'Content-Type':'application/json', Authorization:'Bearer '+token, ...opts.headers }});
+    if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e.error || res.statusText); }
+    return res.json();
+  };
+
+  const fetchList = useCallback(async () => {
+    setLoading(true);
+    try {
+      let url = '/api/withholding?year='+filterYear;
+      if (filterStatus) url += '&status='+filterStatus;
+      setList(await whtApi(url));
+    } catch(e){ setError(e.message); }
+    setLoading(false);
+  }, [filterYear, filterStatus]);
+
+  useEffect(() => { fetchList(); }, [fetchList]);
+
+  const handleSubmit = async () => {
+    try {
+      setError('');
+      const p = { ...form, total_income:parseFloat(form.total_income)||0, total_tax:parseFloat(form.total_tax)||0,
+        items: form.items.map(i=>({...i, income_amount:parseFloat(i.income_amount)||0, tax_amount:parseFloat(i.tax_amount)||0 })) };
+      if (editId) await whtApi('/api/withholding/'+editId, { method:'PATCH', body:JSON.stringify(p) });
+      else await whtApi('/api/withholding', { method:'POST', body:JSON.stringify(p) });
+      setShowForm(false); setEditId(null); setForm(getEmptyWhtForm()); fetchList();
+    } catch(e){ setError(e.message); }
+  };
+
+  const handleIssue = async (id) => { if (!confirm('ออกเอกสารจริง?')) return; try { await whtApi('/api/withholding/'+id+'/issue',{method:'POST'}); fetchList(); } catch(e){ setError(e.message); } };
+  const handleDelete = async (id) => { if (!confirm('ลบเอกสาร?')) return; try { await whtApi('/api/withholding/'+id,{method:'DELETE'}); fetchList(); } catch(e){ setError(e.message); } };
+  const handleEdit = async (id) => { try { const d = await whtApi('/api/withholding/'+id); setForm({...d, total_income:d.total_income||'', total_tax:d.total_tax||'', items:d.items.length?d.items:[{pay_date:'',description:'',income_amount:'',tax_amount:''}]}); setEditId(id); setShowForm(true); } catch(e){ setError(e.message); } };
+  const openPdf = async (id) => { try { const token = localStorage.getItem('token'); const res = await fetch('/api/withholding/'+id+'/pdf', { headers: { Authorization: 'Bearer '+token }}); const blob = await res.blob(); const url = URL.createObjectURL(blob); window.open(url,'_blank'); } catch(e){ setError(e.message); } };
+
+  const addItem = () => setForm(f=>({...f, items:[...f.items,{pay_date:'',description:'',income_amount:'',tax_amount:'',pnd_form:'ภ.ง.ด.3',income_type:'ม.3 เตรส'}]}));
+  const removeItem = (idx) => setForm(f=>({...f, items:f.items.filter((_,i)=>i!==idx)}));
+  const updateItem = (idx,k,v) => setForm(f=>({...f, items:f.items.map((it,i)=>i===idx?{...it,[k]:v}:it)}));
+
+  return (
+    <div>
+      <div style={styles.pageHeader}>
+        <h1 style={styles.pageTitle}>หนังสือรับรองการหักภาษี ณ ที่จ่าย (50 ทวิ)</h1>
+        <button style={styles.btn('primary')} onClick={()=>{setForm(getEmptyWhtForm());setEditId(null);setShowForm(true);}}>+ สร้างเอกสาร</button>
+      </div>
+
+      {error && <div style={styles.error}>{error} <span style={{cursor:'pointer',float:'right'}} onClick={()=>setError('')}>✕</span></div>}
+
+      <div style={styles.searchBar}>
+        <select style={styles.input} value={filterYear} onChange={e=>setFilterYear(e.target.value)}>
+          {[...Array(5)].map((_,i)=>{ const y=new Date().getFullYear()-i; return <option key={y} value={y}>{y+543}</option>; })}
+        </select>
+        <select style={{...styles.input, width:150}} value={filterStatus} onChange={e=>setFilterStatus(e.target.value)}>
+          <option value="">ทั้งหมด</option><option value="draft">ร่าง</option><option value="issued">ออกแล้ว</option>
+        </select>
+      </div>
+
+      <div style={styles.card}>
+        {loading ? <div style={{padding:40,textAlign:'center',color:'#888'}}>กำลังโหลด...</div> : (
+          <table style={styles.table}>
+            <thead><tr>
+              <th style={styles.th}>เลขที่</th><th style={styles.th}>ผู้ถูกหัก</th><th style={styles.th}>แบบ</th>
+              <th style={styles.th}>เงินได้</th><th style={styles.th}>ภาษี</th><th style={styles.th}>สถานะ</th><th style={styles.th}>จัดการ</th>
+            </tr></thead>
+            <tbody>
+              {list.length===0 ? <tr><td colSpan={7} style={{...styles.td,textAlign:'center',color:'#aaa'}}>ไม่มีข้อมูล</td></tr> :
+              list.map(r=>(
+                <tr key={r.id}>
+                  <td style={styles.td}>{r.doc_no}</td>
+                  <td style={styles.td}>{r.payee_name}</td>
+                  <td style={styles.td}>{r.pnd_form}</td>
+                  <td style={{...styles.td,textAlign:'right'}}>{parseFloat(r.total_income).toLocaleString('th-TH',{minimumFractionDigits:2})}</td>
+                  <td style={{...styles.td,textAlign:'right'}}>{parseFloat(r.total_tax).toLocaleString('th-TH',{minimumFractionDigits:2})}</td>
+                  <td style={styles.td}><span style={styles.badge(ST_COLOR[r.status])}>{ST_LABEL[r.status]}</span></td>
+                  <td style={styles.td}>
+                    <div style={{display:'flex',gap:6}}>
+                      <button style={{...styles.btn('default'),fontSize:12,padding:'4px 10px'}} onClick={()=>openPdf(r.id)}>PDF</button>
+                      {r.status==='draft' && <>
+                        <button style={{...styles.btn('default'),fontSize:12,padding:'4px 10px'}} onClick={()=>handleEdit(r.id)}>แก้ไข</button>
+                        <button style={{...styles.btn('success'),fontSize:12,padding:'4px 10px'}} onClick={()=>handleIssue(r.id)}>ออกเอกสาร</button>
+                        <button style={{...styles.btn('danger'),fontSize:12,padding:'4px 10px'}} onClick={()=>handleDelete(r.id)}>ลบ</button>
+                      </>}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {showForm && (
+        <div style={styles.overlay} onClick={()=>setShowForm(false)}>
+          <div style={{...styles.modal,width:750}} onClick={e=>e.stopPropagation()}>
+            <div style={styles.modalHeader}><span style={styles.modalTitle}>{editId?'แก้ไขเอกสาร':'สร้างเอกสารหัก ณ ที่จ่าย'}</span><button onClick={()=>{setShowForm(false);setEditId(null);}} style={{background:'none',fontSize:20,color:'#888'}}>✕</button></div>
+            <div style={styles.modalBody}>
+              <div style={{background:'#f8fafc',padding:14,borderRadius:8,marginBottom:16,border:'1px solid #e2e8f0'}}>
+                <div style={{fontSize:14,fontWeight:700,marginBottom:8}}>ผู้มีหน้าที่หักภาษี (บริษัท)</div>
+                <div style={styles.formGrid}>
+                  <div><label style={styles.label}>ชื่อ</label><input style={styles.input} value={form.payer_name} onChange={e=>setForm(f=>({...f,payer_name:e.target.value}))} /></div>
+                  <div><label style={styles.label}>เลขผู้เสียภาษี</label><input style={styles.input} value={form.payer_tax_id} onChange={e=>setForm(f=>({...f,payer_tax_id:e.target.value}))} /></div>
+                </div>
+              </div>
+              <div style={{background:'#f0f9ff',padding:14,borderRadius:8,marginBottom:16,border:'1px solid #bae6fd'}}>
+                <div style={{fontSize:14,fontWeight:700,marginBottom:8}}>ผู้ถูกหักภาษี</div>
+                <div style={styles.formGrid}>
+                  <div><label style={styles.label}>ชื่อ</label><input style={styles.input} value={form.payee_name} onChange={e=>setForm(f=>({...f,payee_name:e.target.value}))} /></div>
+                  <div><label style={styles.label}>เลขบัตรประชาชน</label><input style={styles.input} value={form.payee_tax_id} onChange={e=>setForm(f=>({...f,payee_tax_id:e.target.value}))} /></div>
+                  <div style={{gridColumn:'1/-1'}}><label style={styles.label}>ที่อยู่</label><input style={styles.input} value={form.payee_address} onChange={e=>setForm(f=>({...f,payee_address:e.target.value}))} /></div>
+                </div>
+              </div>
+
+<div style={styles.formGrid}>
+                <div><label style={styles.label}>ปีภาษี</label><input type="number" style={styles.input} value={form.tax_year} onChange={e=>setForm(f=>({...f,tax_year:parseInt(e.target.value)}))} /></div>
+                <div><label style={styles.label}>วิธีหัก</label><select style={styles.input} value={form.withhold_method} onChange={e=>setForm(f=>({...f,withhold_method:parseInt(e.target.value)}))}><option value={1}>หัก ณ ที่จ่าย</option><option value={2}>ออกให้ตลอดไป</option><option value={3}>ออกให้ครั้งเดียว</option><option value={4}>อื่นๆ</option></select></div>
+              </div>
+              <div style={{marginTop:16}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}><span style={{fontSize:14,fontWeight:700}}>รายการจ่ายเงิน</span><button style={{...styles.btn('default'),fontSize:12,padding:'4px 10px'}} onClick={addItem}>+ เพิ่มรายการ</button></div>
+                {form.items.map((item,idx)=>(
+                  <div key={idx} style={{border:'1px solid #e2e8f0',borderRadius:8,padding:10,marginBottom:10}}>
+                    <div style={{display:'flex',gap:8,marginBottom:6}}>
+                      <div style={{flex:1}}><label style={{...styles.label,fontSize:11}}>แบบ ภ.ง.ด.</label><select style={styles.input} value={item.pnd_form||'ภ.ง.ด.3'} onChange={e=>updateItem(idx,'pnd_form',e.target.value)}>{PND_FORMS.map(p=><option key={p} value={p}>{p}</option>)}</select></div>
+                      <div style={{flex:1}}><label style={{...styles.label,fontSize:11}}>ประเภทเงินได้</label><select style={styles.input} value={item.income_type||'ม.3 เตรส'} onChange={e=>updateItem(idx,'income_type',e.target.value)}>{INCOME_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+                      {form.items.length>1 && <button style={{...styles.btn('danger'),padding:'4px 8px',fontSize:12,alignSelf:'flex-end'}} onClick={()=>removeItem(idx)}>✕</button>}
+                    </div>
+                    <div style={{display:'flex',gap:8,alignItems:'flex-end'}}>
+                      <div style={{width:110}}><label style={{...styles.label,fontSize:11}}>วันที่จ่าย</label><input style={styles.input} value={item.pay_date} onChange={e=>updateItem(idx,'pay_date',e.target.value)} placeholder="เม.ย. 69" /></div>
+                      <div style={{flex:1}}><label style={{...styles.label,fontSize:11}}>รายละเอียด</label><input style={styles.input} value={item.description} onChange={e=>updateItem(idx,'description',e.target.value)} /></div>
+                      <div style={{width:120}}><label style={{...styles.label,fontSize:11}}>จำนวนเงิน</label><input type="number" style={styles.input} value={item.income_amount} onChange={e=>updateItem(idx,'income_amount',e.target.value)} /></div>
+                      <div style={{width:120}}><label style={{...styles.label,fontSize:11}}>ภาษี</label><input type="number" style={styles.input} value={item.tax_amount} onChange={e=>updateItem(idx,'tax_amount',e.target.value)} /></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+
+              <div style={{...styles.formGrid,marginTop:12}}>
+                <div><label style={styles.label}>รวมเงินได้</label><input type="number" style={styles.input} value={form.total_income} onChange={e=>setForm(f=>({...f,total_income:e.target.value}))} /></div>
+                <div><label style={styles.label}>รวมภาษี</label><input type="number" style={styles.input} value={form.total_tax} onChange={e=>setForm(f=>({...f,total_tax:e.target.value}))} /></div>
+              </div>
+            </div>
+            <div style={styles.modalFooter}>
+              <button style={styles.btn('default')} onClick={()=>{setShowForm(false);setEditId(null);}}>ยกเลิก</button>
+              <button style={styles.btn('primary')} onClick={handleSubmit}>{editId?'บันทึก':'สร้างเอกสาร'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

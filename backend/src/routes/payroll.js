@@ -1,0 +1,244 @@
+const express = require('express');
+const { query } = require('../config/database');
+const { authenticate, requirePermission } = require('../middleware/auth');
+
+const router = express.Router();
+
+// GET /api/payroll?year=&month=
+router.get('/', authenticate, async (req, res) => {
+  try {
+    const { year, month } = req.query;
+    if (!year || !month) return res.status(400).json({ error: 'Year and month are required' });
+    const result = await query(
+      `SELECT p.*, s.employee_code, s.first_name_th, s.last_name_th, s.title_th,
+              d.name as department_name, s.position,
+              u1.username as created_by_name, u2.username as approved_by_name
+       FROM payroll p
+       JOIN staff s ON p.staff_id = s.id
+       LEFT JOIN departments d ON s.department_id = d.id
+       LEFT JOIN users u1 ON p.created_by = u1.id
+       LEFT JOIN users u2 ON p.approved_by = u2.id
+       WHERE p.year = $1 AND p.month = $2
+       ORDER BY s.employee_code`,
+      [year, month]
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch payroll' });
+  }
+});
+
+// POST /api/payroll/generate - Generate payroll for a month
+router.post('/generate', authenticate, async (req, res) => {
+  try {
+    const { year, month } = req.body;
+    if (!year || !month) return res.status(400).json({ error: 'Year and month are required' });
+
+    // Check if already exists
+    const existing = await query('SELECT COUNT(*) FROM payroll WHERE year = $1 AND month = $2', [year, month]);
+    if (parseInt(existing.rows[0].count) > 0) {
+      return res.status(400).json({ error: `รายการเงินเดือน ${month}/${year} มีอยู่แล้ว` });
+    }
+
+    // Get all active staff with salary info
+    const staffResult = await query(
+      `SELECT s.id as staff_id, ss.salary, ss.social_security, ss.withholding_tax,
+              ss.social_security_eligible
+       FROM staff s
+       LEFT JOIN staff_salary ss ON ss.staff_id = s.id
+       WHERE s.status = 'active'`
+    );
+
+    if (staffResult.rows.length === 0) {
+      return res.status(400).json({ error: 'ไม่มีพนักงาน active' });
+    }
+
+    let count = 0;
+    for (const staff of staffResult.rows) {
+      const salary = parseFloat(staff.salary) || 0;
+      const ss = parseFloat(staff.social_security) || 0;
+      const tax = parseFloat(staff.withholding_tax) || 0;
+      const netPay = salary - ss - tax;
+
+      await query(
+        `INSERT INTO payroll (staff_id, year, month, salary, social_security, withholding_tax, net_pay, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (staff_id, year, month) DO NOTHING`,
+        [staff.staff_id, year, month, salary, ss, tax, netPay, req.user.id]
+      );
+      count++;
+    }
+
+    res.status(201).json({ message: `สร้างรายการเงินเดือน ${month}/${year} สำเร็จ (${count} คน)` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to generate payroll' });
+  }
+});
+
+// PUT /api/payroll/:id - Update payroll item
+router.put('/:id', authenticate, async (req, res) => {
+  try {
+    const { bonus, overtime, other_income, other_deduction } = req.body;
+
+    // Get current record
+    const current = await query('SELECT * FROM payroll WHERE id = $1', [req.params.id]);
+    if (current.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+
+    const row = current.rows[0];
+    const b = parseFloat(bonus) || 0;
+    const ot = parseFloat(overtime) || 0;
+    const oi = parseFloat(other_income) || 0;
+    const od = parseFloat(other_deduction) || 0;
+    const netPay = parseFloat(row.salary) + b + ot + oi - parseFloat(row.social_security) - parseFloat(row.withholding_tax) - od;
+
+    const result = await query(
+      `UPDATE payroll SET bonus=$1, overtime=$2, other_income=$3, other_deduction=$4, net_pay=$5, updated_at=NOW()
+       WHERE id=$6 RETURNING *`,
+      [b, ot, oi, od, netPay, req.params.id]
+    );
+    res.json({ data: result.rows[0], message: 'อัปเดตสำเร็จ' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to update payroll' });
+  }
+});
+
+// PUT /api/payroll/approve/:year/:month - Approve entire month
+router.put('/approve/:year/:month', authenticate, async (req, res) => {
+  try {
+    await query(
+      `UPDATE payroll SET status = 'approved', approved_by = $1, updated_at = NOW()
+       WHERE year = $2 AND month = $3 AND status = 'draft'`,
+      [req.user.id, req.params.year, req.params.month]
+    );
+    res.json({ message: `อนุมัติเงินเดือน ${req.params.month}/${req.params.year} สำเร็จ` });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to approve payroll' });
+  }
+});
+
+// GET /api/payroll/staff/:staffId - Get payroll history for a staff member
+router.get('/staff/:staffId', authenticate, async (req, res) => {
+  try {
+    const result = await query(
+      `SELECT p.*, u1.username as created_by_name, u2.username as approved_by_name
+       FROM payroll p
+       LEFT JOIN users u1 ON p.created_by = u1.id
+       LEFT JOIN users u2 ON p.approved_by = u2.id
+       WHERE p.staff_id = $1
+       ORDER BY p.year DESC, p.month DESC`,
+      [req.params.staffId]
+    );
+    res.json({ data: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch payroll history' });
+  }
+});
+
+// GET /api/payroll/cert/:staffId/:year - Get/Generate 50 Tawi cert data
+router.get('/cert/:staffId/:year', authenticate, async (req, res) => {
+  try {
+    const { staffId, year } = req.params;
+
+    // Get staff info
+    const staffRes = await query(
+      `SELECT s.*, d.name as department_name, sc.address,
+              sa.house_no, sa.moo, sa.soi, sa.road, sa.sub_district, sa.district, sa.province, sa.postal_code
+       FROM staff s
+       LEFT JOIN departments d ON s.department_id = d.id
+       LEFT JOIN staff_contact sc ON sc.staff_id = s.id
+       LEFT JOIN staff_address sa ON sa.staff_id = s.id
+       WHERE s.id = $1`,
+      [staffId]
+    );
+    if (staffRes.rows.length === 0) return res.status(404).json({ error: 'Staff not found' });
+
+    // Get yearly payroll summary
+    const payrollRes = await query(
+      `SELECT 
+        SUM(salary + bonus + overtime + other_income) as total_income,
+        SUM(withholding_tax) as total_tax,
+        SUM(social_security) as total_social_security,
+        COUNT(*) as months_count
+       FROM payroll
+       WHERE staff_id = $1 AND year = $2 AND status = 'approved'`,
+      [staffId, year]
+    );
+
+    // Get monthly breakdown
+    const monthlyRes = await query(
+      `SELECT month, salary, bonus, overtime, other_income, social_security, withholding_tax, net_pay
+       FROM payroll WHERE staff_id = $1 AND year = $2 ORDER BY month`,
+      [staffId, year]
+    );
+
+    res.json({
+      staff: staffRes.rows[0],
+      summary: payrollRes.rows[0],
+      monthly: monthlyRes.rows,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch cert data' });
+  }
+});
+
+// DELETE /api/payroll/:id - Delete single payroll item
+router.delete('/:id', authenticate, async (req, res) => {
+  try {
+    const record = await query('SELECT * FROM payroll WHERE id = $1', [req.params.id]);
+    if (record.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    if (record.rows[0].status === 'approved') return res.status(400).json({ error: 'ไม่สามารถลบรายการที่อนุมัติแล้ว' });
+    await query('DELETE FROM payroll WHERE id = $1', [req.params.id]);
+    res.json({ message: 'ลบรายการสำเร็จ' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to delete payroll item' });
+  }
+});
+
+// DELETE /api/payroll/month/:year/:month - Delete entire month
+router.delete('/month/:year/:month', authenticate, async (req, res) => {
+  try {
+    const { year, month } = req.params;
+    const approved = await query('SELECT COUNT(*) FROM payroll WHERE year=$1 AND month=$2 AND status=\'approved\'', [year, month]);
+    if (parseInt(approved.rows[0].count) > 0) return res.status(400).json({ error: 'ไม่สามารถลบได้ มีรายการที่อนุมัติแล้ว' });
+    const result = await query('DELETE FROM payroll WHERE year=$1 AND month=$2', [year, month]);
+    res.json({ message: `ลบรายการเงินเดือน ${month}/${year} สำเร็จ (${result.rowCount} รายการ)` });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to delete payroll month' });
+  }
+});
+
+// POST /api/payroll/add-single - Add single staff to payroll
+router.post('/add-single', authenticate, async (req, res) => {
+  try {
+    const { staff_id, year, month } = req.body;
+    if (!staff_id || !year || !month) return res.status(400).json({ error: 'staff_id, year, month are required' });
+
+    const existing = await query('SELECT id FROM payroll WHERE staff_id=$1 AND year=$2 AND month=$3', [staff_id, year, month]);
+    if (existing.rows.length > 0) return res.status(400).json({ error: 'พนักงานนี้มีรายการในเดือนนี้แล้ว' });
+
+    const staffSalary = await query('SELECT * FROM staff_salary WHERE staff_id = $1', [staff_id]);
+    const ss = staffSalary.rows[0] || {};
+    const salary = parseFloat(ss.salary) || 0;
+    const socialSecurity = parseFloat(ss.social_security) || 0;
+    const tax = parseFloat(ss.withholding_tax) || 0;
+    const netPay = salary - socialSecurity - tax;
+
+    const result = await query(
+      `INSERT INTO payroll (staff_id, year, month, salary, social_security, withholding_tax, net_pay, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [staff_id, year, month, salary, socialSecurity, tax, netPay, req.user.id]
+    );
+    res.status(201).json({ data: result.rows[0], message: 'เพิ่มรายการสำเร็จ' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to add payroll item' });
+  }
+});
+
+module.exports = router;
