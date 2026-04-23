@@ -187,7 +187,11 @@ router.post('/:id/receive', authenticate, async (req, res) => {
       const before = parseFloat(product.rows[0].stock_qty);
       const after = before + recvQty;
       
-      await query('UPDATE products SET stock_qty = $1, updated_at = NOW() WHERE id = $2', [after, poItem.product_id]);
+// Average Cost = (stock เดิม × ราคาทุนเดิม + จำนวนรับ × ราคาซื้อ) / stock ใหม่
+      const productInfo = await query('SELECT cost_price FROM products WHERE id = $1', [poItem.product_id]);
+      const oldCost = parseFloat(productInfo.rows[0].cost_price) || 0;
+      const avgCost = after > 0 ? ((before * oldCost) + (recvQty * parseFloat(poItem.unit_price))) / after : parseFloat(poItem.unit_price);
+      await query('UPDATE products SET stock_qty = $1, cost_price = $2, updated_at = NOW() WHERE id = $3', [after, Math.round(avgCost * 100) / 100, poItem.product_id]);
       
       // Record stock movement
       await query(`
