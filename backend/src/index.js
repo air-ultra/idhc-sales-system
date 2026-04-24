@@ -11,6 +11,7 @@ const withholdingRoutes = require('./routes/withholdingTax');
 const productRoutes = require('./routes/products');
 const supplierRoutes = require('./routes/suppliers');
 const poRoutes = require('./routes/purchaseOrders');
+const categoryRoutes = require('./routes/product-categories');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -40,6 +41,7 @@ app.use('/api/withholding', withholdingRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/suppliers', supplierRoutes);
 app.use('/api/purchase-orders', poRoutes);
+app.use('/api/product-categories', categoryRoutes);
 app.use('/api/users', userRoutes);
 
 // Error handler

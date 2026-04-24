@@ -1,184 +1,252 @@
+// backend/src/routes/products.js
 const express = require('express');
 const { query } = require('../config/database');
-const { authenticate } = require('../middleware/auth');
-
+const { authenticate, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 
-async function genProductCode() {
-  const result = await query("SELECT nextval('product_code_seq') AS seq");
-  return 'PRD-' + String(result.rows[0].seq).padStart(4, '0');
-}
-
-// ═══ CATEGORIES ═══
-router.get('/categories', authenticate, async (req, res) => {
-  try {
-    const result = await query('SELECT * FROM product_categories WHERE is_active = true ORDER BY name');
-    res.json(result.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-router.post('/categories', authenticate, async (req, res) => {
-  try {
-    const { name, code, description } = req.body;
-    const result = await query(
-      'INSERT INTO product_categories (name, code, description) VALUES ($1, $2, $3) RETURNING *',
-      [name, code, description || '']
-    );
-    res.status(201).json(result.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// ═══ PRODUCTS ═══
-
-// LIST
+/* ========== LIST ========== */
 router.get('/', authenticate, async (req, res) => {
   try {
-    const { category_id, search, active, product_type } = req.query;
-    let sql = `SELECT p.*, c.name AS category_name
-               FROM products p
-               LEFT JOIN product_categories c ON p.category_id = c.id
-               WHERE 1=1`;
+    const { product_type, category_id, search } = req.query;
     const params = [];
-    if (category_id) { params.push(category_id); sql += ` AND p.category_id = $${params.length}`; }
-    if (active !== undefined) { params.push(active === 'true'); sql += ` AND p.is_active = $${params.length}`; }
-    if (product_type) { params.push(product_type); sql += ` AND p.product_type = $${params.length}`; }
-    if (search) { params.push(`%${search}%`); sql += ` AND (p.name ILIKE $${params.length} OR p.product_code ILIKE $${params.length} OR p.model ILIKE $${params.length})`; }
-    sql += ' ORDER BY p.product_code';
-    const result = await query(sql, params);
-    res.json(result.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
+    const conditions = [];
 
-// GET BY ID
-router.get('/:id', authenticate, async (req, res) => {
-  try {
+    if (product_type) {
+      params.push(product_type);
+      conditions.push(`p.product_type = $${params.length}`);
+    }
+    if (category_id) {
+      params.push(category_id);
+      conditions.push(`p.category_id = $${params.length}`);
+    }
+    if (search) {
+      params.push(`%${search}%`);
+      const idx = params.length;
+      conditions.push(`(p.product_code ILIKE $${idx} OR p.name ILIKE $${idx} OR p.model ILIKE $${idx})`);
+    }
+
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const result = await query(
       `SELECT p.*, c.name AS category_name
-       FROM products p LEFT JOIN product_categories c ON p.category_id = c.id
-       WHERE p.id = $1`, [req.params.id]
+       FROM products p
+       LEFT JOIN product_categories c ON c.id = p.category_id
+       ${whereClause}
+       ORDER BY p.id DESC`,
+      params
     );
-    if (!result.rows.length) return res.status(404).json({ error: 'ไม่พบสินค้า' });
-
-    // Get serials (for stock type)
-    const serials = await query('SELECT * FROM product_serials WHERE product_id = $1 ORDER BY id', [req.params.id]);
-
-    // Get recent movements
-    const movements = await query(
-      `SELECT sm.*, u.username AS created_by_name
-       FROM stock_movements sm
-       LEFT JOIN users u ON sm.created_by = u.id
-       WHERE sm.product_id = $1
-       ORDER BY sm.created_at DESC LIMIT 20`, [req.params.id]);
-
-    res.json({ ...result.rows[0], serials: serials.rows, movements: movements.rows });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    res.json(result.rows);
+  } catch (err) {
+    console.error('GET /products error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// CREATE
-router.post('/', authenticate, async (req, res) => {
+/* ========== GET by id ========== */
+router.get('/:id', authenticate, async (req, res) => {
   try {
-    const d = req.body;
-    const product_code = d.product_code || await genProductCode();
-    const result = await query(`
-      INSERT INTO products (product_code, name, model, category_id, product_type, default_unit, cost_price, sell_price, stock_qty, description)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *
-    `, [product_code, d.name, d.model || '', d.category_id || null, d.product_type || 'stock',
-        d.default_unit || 'ชิ้น', d.cost_price || 0, d.sell_price || 0, d.stock_qty || 0, d.description || '']);
-
-    // Insert initial stock movement if stock_qty > 0 and type is stock
-    if (parseFloat(d.stock_qty) > 0 && d.product_type === 'stock') {
-      await query(`
-        INSERT INTO stock_movements (product_id, movement_type, quantity, before_qty, after_qty, reference_type, notes, created_by)
-        VALUES ($1, 'in', $2, 0, $2, 'initial', 'สต็อกเริ่มต้น', $3)
-      `, [result.rows[0].id, d.stock_qty, req.user.id]);
-    }
-
-    // Insert serials if provided
-    if (d.serials && d.serials.length) {
-      for (const s of d.serials) {
-        await query('INSERT INTO product_serials (product_id, serial_no, mac_address, notes) VALUES ($1, $2, $3, $4)',
-          [result.rows[0].id, s.serial_no || '', s.mac_address || '', s.notes || '']);
-      }
-    }
-
-    res.status(201).json(result.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const { id } = req.params;
+    const result = await query(
+      `SELECT p.*, c.name AS category_name
+       FROM products p
+       LEFT JOIN product_categories c ON c.id = p.category_id
+       WHERE p.id = $1`,
+      [id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('GET /products/:id error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// UPDATE
-router.patch('/:id', authenticate, async (req, res) => {
+/* ========== GET serials of a product (with PO info) ========== */
+router.get('/:id/serials', authenticate, async (req, res) => {
   try {
-    const d = req.body;
-    await query(`
-      UPDATE products SET
-        name = COALESCE($1, name), model = COALESCE($2, model),
-        category_id = COALESCE($3, category_id), product_type = COALESCE($4, product_type),
-        default_unit = COALESCE($5, default_unit),
-        cost_price = COALESCE($6, cost_price), sell_price = COALESCE($7, sell_price),
-        description = COALESCE($8, description), is_active = COALESCE($9, is_active),
-        updated_at = NOW()
-      WHERE id = $10
-    `, [d.name, d.model, d.category_id, d.product_type, d.default_unit, d.cost_price, d.sell_price, d.description, d.is_active, req.params.id]);
-
-    const updated = await query('SELECT * FROM products WHERE id = $1', [req.params.id]);
-    res.json(updated.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const { id } = req.params;
+    const result = await query(
+      `SELECT
+         ps.*,
+         po.po_number,
+         po.received_at AS po_received_at,
+         po.po_date AS po_order_date,
+         s.name AS supplier_name
+       FROM product_serials ps
+       LEFT JOIN purchase_orders po ON po.id = ps.po_id
+       LEFT JOIN suppliers s ON s.id = po.supplier_id
+       WHERE ps.product_id = $1
+       ORDER BY ps.created_at DESC, ps.id DESC`,
+      [id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('GET /products/:id/serials error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// ADJUST STOCK
-router.post('/:id/adjust-stock', authenticate, async (req, res) => {
-  try {
-    const { type, quantity, notes } = req.body;
-    if (!type || !quantity) return res.status(400).json({ error: 'ระบุประเภทและจำนวน' });
-
-    const product = await query('SELECT stock_qty, product_type FROM products WHERE id = $1', [req.params.id]);
-    if (!product.rows.length) return res.status(404).json({ error: 'ไม่พบสินค้า' });
-    if (product.rows[0].product_type !== 'stock') return res.status(400).json({ error: 'ปรับ stock ได้เฉพาะสินค้านับสต็อก' });
-
-    const before = parseFloat(product.rows[0].stock_qty);
-    const qty = parseFloat(quantity);
-    const after = type === 'in' ? before + qty : before - qty;
-
-    if (after < 0) return res.status(400).json({ error: 'สต็อกไม่เพียงพอ' });
-
-    await query('UPDATE products SET stock_qty = $1, updated_at = NOW() WHERE id = $2', [after, req.params.id]);
-
-    await query(`
-      INSERT INTO stock_movements (product_id, movement_type, quantity, before_qty, after_qty, reference_type, notes, created_by)
-      VALUES ($1, $2, $3, $4, $5, 'manual', $6, $7)
-    `, [req.params.id, type, qty, before, after, notes || '', req.user.id]);
-
-    res.json({ before, after, movement_type: type, quantity: qty });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// ═══ SERIALS ═══
-
-// Add serial
+/* ========== ADD serial manually (fallback) ========== */
 router.post('/:id/serials', authenticate, async (req, res) => {
   try {
+    const { id } = req.params;
     const { serial_no, mac_address, notes } = req.body;
+    if (!serial_no || !String(serial_no).trim()) {
+      return res.status(400).json({ error: 'serial_no required' });
+    }
+
+    const dup = await query(
+      `SELECT id FROM product_serials WHERE product_id = $1 AND serial_no = $2`,
+      [id, String(serial_no).trim()]
+    );
+    if (dup.rows.length > 0) {
+      return res.status(400).json({ error: `Serial "${serial_no}" มีอยู่แล้ว` });
+    }
+
     const result = await query(
-      'INSERT INTO product_serials (product_id, serial_no, mac_address, notes) VALUES ($1, $2, $3, $4) RETURNING *',
-      [req.params.id, serial_no || '', mac_address || '', notes || '']);
+      `INSERT INTO product_serials (product_id, serial_no, mac_address, status, notes)
+       VALUES ($1, $2, $3, 'available', $4)
+       RETURNING *`,
+      [id, String(serial_no).trim(), mac_address || null, notes || null]
+    );
+    await query(
+      `UPDATE products SET stock_qty = CASE WHEN stock_qty IS NULL OR stock_qty::text = 'NaN' THEN 0 ELSE stock_qty END + 1, updated_at = NOW() WHERE id = $1`,
+      [id]
+    );
     res.status(201).json(result.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error('POST /products/:id/serials error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// Delete serial
+/* ========== DELETE serial ========== */
 router.delete('/:id/serials/:serialId', authenticate, async (req, res) => {
   try {
-    await query('DELETE FROM product_serials WHERE id = $1 AND product_id = $2', [req.params.serialId, req.params.id]);
-    res.json({ message: 'ลบสำเร็จ' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const { id, serialId } = req.params;
+    const result = await query(
+      `DELETE FROM product_serials WHERE id = $1 AND product_id = $2 RETURNING *`,
+      [serialId, id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Serial not found' });
+    await query(
+      `UPDATE products SET stock_qty = GREATEST(CASE WHEN stock_qty IS NULL OR stock_qty::text = 'NaN' THEN 0 ELSE stock_qty END - 1, 0), updated_at = NOW() WHERE id = $1`,
+      [id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error('DELETE /products/:id/serials/:serialId error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// DELETE product (soft)
+/* ========== CREATE ========== */
+router.post('/', authenticate, async (req, res) => {
+  try {
+    const {
+      name, model, description, category_id, product_type,
+      default_unit, cost_price, sell_price
+    } = req.body;
+
+    if (!name) return res.status(400).json({ error: 'name required' });
+
+    const last = await query(`SELECT product_code FROM products ORDER BY id DESC LIMIT 1`);
+    let nextNum = 1;
+    if (last.rows.length > 0 && last.rows[0].product_code) {
+      const m = last.rows[0].product_code.match(/PRD-(\d+)/);
+      if (m) nextNum = parseInt(m[1]) + 1;
+    }
+    const product_code = `PRD-${String(nextNum).padStart(4, '0')}`;
+
+    const result = await query(
+      `INSERT INTO products
+         (product_code, name, model, description, category_id, product_type, default_unit,
+          cost_price, sell_price, stock_qty, is_active)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, true)
+       RETURNING *`,
+      [product_code, name, model || null, description || null, category_id || null,
+       product_type || 'stock', default_unit || 'ชิ้น',
+       cost_price || 0, sell_price || 0]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('POST /products error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ========== UPDATE ========== */
+router.put('/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      name, model, description, category_id, product_type,
+      default_unit, cost_price, sell_price
+    } = req.body;
+
+    const result = await query(
+      `UPDATE products SET
+         name = COALESCE($1, name),
+         model = $2,
+         description = $3,
+         category_id = $4,
+         product_type = COALESCE($5, product_type),
+         default_unit = COALESCE($6, default_unit),
+         cost_price = COALESCE($7, cost_price),
+         sell_price = COALESCE($8, sell_price),
+         updated_at = NOW()
+       WHERE id = $9
+       RETURNING *`,
+      [name, model || null, description || null, category_id || null,
+       product_type, default_unit, cost_price, sell_price, id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('PUT /products/:id error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ========== DELETE ========== */
 router.delete('/:id', authenticate, async (req, res) => {
   try {
-    await query('UPDATE products SET is_active = false, updated_at = NOW() WHERE id = $1', [req.params.id]);
-    res.json({ message: 'ลบสำเร็จ' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const { id } = req.params;
+    const serialCheck = await query(
+      `SELECT COUNT(*) FROM product_serials WHERE product_id = $1`, [id]
+    );
+    if (parseInt(serialCheck.rows[0].count) > 0) {
+      return res.status(400).json({ error: 'ลบไม่ได้: มี Serial ในระบบอยู่' });
+    }
+    await query(`DELETE FROM products WHERE id = $1`, [id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('DELETE /products/:id error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ========== adjust stock (non_stock) ========== */
+router.post('/:id/adjust-stock', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { qty_change } = req.body;
+    if (!qty_change || qty_change === 0) {
+      return res.status(400).json({ error: 'qty_change required' });
+    }
+    const result = await query(
+      `UPDATE products
+       SET stock_qty = GREATEST(CASE WHEN stock_qty IS NULL OR stock_qty::text = 'NaN' THEN 0 ELSE stock_qty END + $1, 0),
+           updated_at = NOW()
+       WHERE id = $2
+       RETURNING *`,
+      [qty_change, id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('POST /products/:id/adjust-stock error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

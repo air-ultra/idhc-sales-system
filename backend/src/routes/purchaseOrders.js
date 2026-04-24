@@ -1,222 +1,364 @@
+// backend/src/routes/purchase-orders.js
 const express = require('express');
-const { query } = require('../config/database');
-const { authenticate } = require('../middleware/auth');
-
+const { query, getClient } = require('../config/database');
+const { authenticate, requirePermission } = require('../middleware/auth');
 const router = express.Router();
 
-async function genPONumber() {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const result = await query("SELECT nextval('po_number_seq') AS seq");
-  return `PO${yyyy}${mm}${String(result.rows[0].seq).padStart(4, '0')}`;
-}
-
-// LIST
+/* ========== GET all POs ========== */
 router.get('/', authenticate, async (req, res) => {
   try {
-    const { status, supplier_id, year } = req.query;
-    let sql = `SELECT po.*, s.name AS supplier_name, s.code AS supplier_code,
-                      u.username AS created_by_name
-               FROM purchase_orders po
-               LEFT JOIN suppliers s ON po.supplier_id = s.id
-               LEFT JOIN users u ON po.created_by = u.id
-               WHERE 1=1`;
-    const params = [];
-    if (status) { params.push(status); sql += ` AND po.status = $${params.length}`; }
-    if (supplier_id) { params.push(supplier_id); sql += ` AND po.supplier_id = $${params.length}`; }
-    if (year) { params.push(year); sql += ` AND EXTRACT(YEAR FROM po.po_date) = $${params.length}`; }
-    sql += ' ORDER BY po.created_at DESC';
-    const result = await query(sql, params);
+    const result = await query(`
+      SELECT
+        po.*,
+        s.name AS supplier_name,
+        s.code AS supplier_code,
+        COALESCE((SELECT COUNT(*) FROM po_items WHERE po_id = po.id), 0) AS item_count
+      FROM purchase_orders po
+      LEFT JOIN suppliers s ON s.id = po.supplier_id
+      ORDER BY po.id DESC
+    `);
     res.json(result.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    console.error('GET /purchase-orders error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// GET BY ID (with items)
+/* ========== GET PO by id (with items) ========== */
 router.get('/:id', authenticate, async (req, res) => {
   try {
+    const { id } = req.params;
     const po = await query(
-      `SELECT po.*, s.name AS supplier_name, s.code AS supplier_code,
-              u.username AS created_by_name
+      `SELECT po.*,
+              s.name AS supplier_name, s.code AS supplier_code,
+              s.tax_id AS supplier_tax_id, s.address AS supplier_address,
+              s.phone AS supplier_phone
        FROM purchase_orders po
-       LEFT JOIN suppliers s ON po.supplier_id = s.id
-       LEFT JOIN users u ON po.created_by = u.id
-       WHERE po.id = $1`, [req.params.id]);
-    if (!po.rows.length) return res.status(404).json({ error: 'ไม่พบใบสั่งซื้อ' });
-    
+       LEFT JOIN suppliers s ON s.id = po.supplier_id
+       WHERE po.id = $1`,
+      [id]
+    );
+    if (po.rows.length === 0) return res.status(404).json({ error: 'PO not found' });
+
     const items = await query(
-      `SELECT pi.*, p.product_code, p.name AS product_name
+      `SELECT pi.*,
+              p.product_code, p.name AS product_name,
+              p.model AS product_model, p.product_type,
+              p.default_unit AS product_unit
        FROM po_items pi
-       LEFT JOIN products p ON pi.product_id = p.id
-       WHERE pi.po_id = $1 ORDER BY pi.id`, [req.params.id]);
-    
-    const approvals = await query(
-      `SELECT pa.*, u.username
-       FROM po_approvals pa
-       LEFT JOIN users u ON pa.approved_by = u.id
-       WHERE pa.po_id = $1 ORDER BY pa.created_at`, [req.params.id]);
-    
-    res.json({ ...po.rows[0], items: items.rows, approvals: approvals.rows });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+       LEFT JOIN products p ON p.id = pi.product_id
+       WHERE pi.po_id = $1
+       ORDER BY pi.id`,
+      [id]
+    );
+
+    res.json({ ...po.rows[0], items: items.rows });
+  } catch (err) {
+    console.error('GET /purchase-orders/:id error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// CREATE
+/* ========== CREATE PO ========== */
 router.post('/', authenticate, async (req, res) => {
+  const client = await getClient();
   try {
-    const d = req.body;
-    const po_number = await genPONumber();
-    
-    // Calculate totals from items
+    const { supplier_id, po_date, notes, vat_rate, items } = req.body;
+
+    if (!supplier_id) return res.status(400).json({ error: 'supplier_id is required' });
+    if (!items || items.length === 0) return res.status(400).json({ error: 'items are required' });
+
+    await client.query('BEGIN');
+
+    // gen po_number: PO{YYYY}{MM}{NNNN} — running reset ทุกเดือน
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const prefix = `PO${yyyy}${mm}`;
+    const last = await client.query(
+      `SELECT po_number FROM purchase_orders
+       WHERE po_number LIKE $1 ORDER BY po_number DESC LIMIT 1`,
+      [`${prefix}%`]
+    );
+    let nextNum = 1;
+    if (last.rows.length > 0 && last.rows[0].po_number) {
+      const m = last.rows[0].po_number.match(new RegExp(`^${prefix}(\\d+)$`));
+      if (m) nextNum = parseInt(m[1]) + 1;
+    }
+    const po_number = `${prefix}${String(nextNum).padStart(4, '0')}`;
+
+    // totals
     let total_amount = 0;
-    if (d.items) {
-      d.items.forEach(item => { total_amount += (parseFloat(item.quantity) || 0) * (parseFloat(item.unit_price) || 0); });
-    }
-const vat_rate = d.vat_rate !== undefined ? parseFloat(d.vat_rate) : 7;
-    const vat_amount = total_amount * vat_rate / 100;
+    items.forEach(it => {
+      total_amount += Number(it.quantity || 0) * Number(it.unit_price || 0);
+    });
+    const vat_amount = total_amount * (Number(vat_rate || 0) / 100);
     const grand_total = total_amount + vat_amount;
-    
-    const result = await query(`
-      INSERT INTO purchase_orders (po_number, supplier_id, po_date, expected_date, total_amount, vat_rate, vat_amount, grand_total, notes, created_by)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *
-    `, [po_number, d.supplier_id, d.po_date || new Date(), d.expected_date || null,
-        total_amount, vat_rate, vat_amount, grand_total, d.notes || '', req.user.id]);
-    
-    const po_id = result.rows[0].id;
-    
-    // Insert items
-    if (d.items && d.items.length) {
-      for (const item of d.items) {
-        const qty = parseFloat(item.quantity) || 0;
-        const price = parseFloat(item.unit_price) || 0;
-        await query(`
-          INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price)
-          VALUES ($1, $2, $3, $4, $5, $6)
-        `, [po_id, item.product_id, item.unit || 'ชิ้น', qty, price, qty * price]);
-      }
+
+    const poRes = await client.query(
+      `INSERT INTO purchase_orders
+         (po_number, supplier_id, po_date, notes, vat_rate,
+          total_amount, vat_amount, grand_total, status, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft', $9)
+       RETURNING *`,
+      [po_number, supplier_id, po_date || new Date(), notes || null,
+       vat_rate || 0, total_amount, vat_amount, grand_total, req.user.id]
+    );
+    const po = poRes.rows[0];
+
+    for (const it of items) {
+      await client.query(
+        `INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [po.id, it.product_id, it.unit || 'ชิ้น',
+         it.quantity, it.unit_price,
+         Number(it.quantity) * Number(it.unit_price)]
+      );
     }
-    
-    res.status(201).json(result.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+
+    await client.query('COMMIT');
+    res.status(201).json(po);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('POST /purchase-orders error:', err);
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
 });
 
-// UPDATE (draft only)
-router.patch('/:id', authenticate, async (req, res) => {
-  try {
-    const existing = await query('SELECT status FROM purchase_orders WHERE id = $1', [req.params.id]);
-    if (!existing.rows.length) return res.status(404).json({ error: 'ไม่พบใบสั่งซื้อ' });
-    if (existing.rows[0].status !== 'draft') return res.status(400).json({ error: 'แก้ไขได้เฉพาะร่าง' });
-    
-    const d = req.body;
-    
-    // Recalculate totals if items provided
-    let total_amount = parseFloat(d.total_amount) || 0;
-    if (d.items) {
-      total_amount = 0;
-      d.items.forEach(item => { total_amount += (parseFloat(item.quantity) || 0) * (parseFloat(item.unit_price) || 0); });
-    }
-const vat_rate = d.vat_rate !== undefined ? parseFloat(d.vat_rate) : 7;
-    const vat_amount = total_amount * vat_rate / 100;
-    const grand_total = total_amount + vat_amount;
-    
-    await query(`
-      UPDATE purchase_orders SET
-        supplier_id = COALESCE($1, supplier_id),
-        po_date = COALESCE($2, po_date),
-        expected_date = COALESCE($3, expected_date),
-        total_amount = $4, vat_rate = $5, vat_amount = $6, grand_total = $7,
-        notes = COALESCE($8, notes),
-        updated_at = NOW()
-      WHERE id = $9
-    `, [d.supplier_id, d.po_date, d.expected_date, total_amount, vat_rate, vat_amount, grand_total, d.notes, req.params.id]);
-    
-    // Update items
-    if (d.items) {
-      await query('DELETE FROM po_items WHERE po_id = $1', [req.params.id]);
-      for (const item of d.items) {
-        const qty = parseFloat(item.quantity) || 0;
-        const price = parseFloat(item.unit_price) || 0;
-        await query(`
-          INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price)
-          VALUES ($1, $2, $3, $4, $5, $6)
-        `, [req.params.id, item.product_id, item.unit || 'ชิ้น', qty, price, qty * price]);
-      }
-    }
-    
-    const updated = await query('SELECT * FROM purchase_orders WHERE id = $1', [req.params.id]);
-    res.json(updated.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// APPROVE
+/* ========== APPROVE PO ========== */
 router.post('/:id/approve', authenticate, async (req, res) => {
   try {
-    const result = await query(`
-      UPDATE purchase_orders SET status = 'approved', approved_by = $1, approved_at = NOW(), updated_at = NOW()
-      WHERE id = $2 AND status = 'draft' RETURNING *
-    `, [req.user.id, req.params.id]);
-    if (!result.rows.length) return res.status(400).json({ error: 'ไม่สามารถอนุมัติได้' });
-    
-    await query(`INSERT INTO po_approvals (po_id, approved_by, action, comment) VALUES ($1, $2, 'approved', $3)`,
-      [req.params.id, req.user.id, req.body.comment || '']);
-    
-    res.json(result.rows[0]);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// RECEIVE GOODS (approved → received, update stock)
-router.post('/:id/receive', authenticate, async (req, res) => {
-  try {
-    const po = await query('SELECT * FROM purchase_orders WHERE id = $1', [req.params.id]);
-    if (!po.rows.length) return res.status(404).json({ error: 'ไม่พบใบสั่งซื้อ' });
-    if (po.rows[0].status !== 'approved') return res.status(400).json({ error: 'ต้องอนุมัติก่อนรับสินค้า' });
-    
-    const receivedItems = req.body.items || [];
-    const poItems = await query('SELECT * FROM po_items WHERE po_id = $1', [req.params.id]);
-    
-    for (const poItem of poItems.rows) {
-      const recv = receivedItems.find(r => r.po_item_id === poItem.id);
-      const recvQty = recv ? parseFloat(recv.quantity) : parseFloat(poItem.quantity);
-      
-      if (recvQty <= 0) continue;
-      
-      // Update PO item received qty
-      await query('UPDATE po_items SET received_qty = received_qty + $1 WHERE id = $2', [recvQty, poItem.id]);
-      
-      // Update product stock
-      const product = await query('SELECT stock_qty FROM products WHERE id = $1', [poItem.product_id]);
-      const before = parseFloat(product.rows[0].stock_qty);
-      const after = before + recvQty;
-      
-// Average Cost = (stock เดิม × ราคาทุนเดิม + จำนวนรับ × ราคาซื้อ) / stock ใหม่
-      const productInfo = await query('SELECT cost_price FROM products WHERE id = $1', [poItem.product_id]);
-      const oldCost = parseFloat(productInfo.rows[0].cost_price) || 0;
-      const avgCost = after > 0 ? ((before * oldCost) + (recvQty * parseFloat(poItem.unit_price))) / after : parseFloat(poItem.unit_price);
-      await query('UPDATE products SET stock_qty = $1, cost_price = $2, updated_at = NOW() WHERE id = $3', [after, Math.round(avgCost * 100) / 100, poItem.product_id]);
-      
-      // Record stock movement
-      await query(`
-        INSERT INTO stock_movements (product_id, movement_type, quantity, before_qty, after_qty, reference_type, reference_id, notes, created_by)
-        VALUES ($1, 'in', $2, $3, $4, 'po', $5, $6, $7)
-      `, [poItem.product_id, recvQty, before, after, req.params.id, `รับจาก PO ${po.rows[0].po_number}`, req.user.id]);
+    const { id } = req.params;
+    const result = await query(
+      `UPDATE purchase_orders
+       SET status = 'approved', approved_by = $1, approved_at = NOW(), updated_at = NOW()
+       WHERE id = $2 AND status = 'draft'
+       RETURNING *`,
+      [req.user.id, id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: 'PO ไม่พบ หรือสถานะไม่ใช่ draft' });
     }
-    
-    // Update PO status
-    await query("UPDATE purchase_orders SET status = 'received', updated_at = NOW() WHERE id = $1", [req.params.id]);
-    
-    await query(`INSERT INTO po_approvals (po_id, approved_by, action, comment) VALUES ($1, $2, 'received', $3)`,
-      [req.params.id, req.user.id, req.body.comment || 'รับสินค้าเรียบร้อย']);
-    
-    res.json({ message: 'รับสินค้าเรียบร้อย' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('POST /purchase-orders/:id/approve error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// DELETE (draft only)
+/* ========== RECEIVE PO (with serials) ========== */
+router.post('/:id/receive', authenticate, async (req, res) => {
+  const client = await getClient();
+  try {
+    const { id } = req.params;
+    const { items } = req.body;
+
+    if (!items || items.length === 0) {
+      return res.status(400).json({ error: 'items are required' });
+    }
+
+    await client.query('BEGIN');
+
+    const poCheck = await client.query(
+      `SELECT * FROM purchase_orders WHERE id = $1 FOR UPDATE`, [id]
+    );
+    if (poCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'PO not found' });
+    }
+    const po = poCheck.rows[0];
+    if (po.status !== 'approved') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `PO สถานะ "${po.status}" ยังรับสินค้าไม่ได้ (ต้อง approved)` });
+    }
+
+    const poItemsRes = await client.query(
+      `SELECT pi.*, p.product_type, p.name AS product_name, p.product_code
+       FROM po_items pi
+       LEFT JOIN products p ON p.id = pi.product_id
+       WHERE pi.po_id = $1`,
+      [id]
+    );
+    const poItemsMap = {};
+    poItemsRes.rows.forEach(it => { poItemsMap[it.id] = it; });
+
+    for (const it of items) {
+      const poItem = poItemsMap[it.po_item_id];
+      if (!poItem) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: `ไม่พบ po_item_id ${it.po_item_id}` });
+      }
+
+      const productType = poItem.product_type || 'stock';
+      const qtyOrdered = Number(poItem.quantity);
+
+      if (productType === 'stock') {
+        const serials = it.serials || [];
+        if (serials.length !== qtyOrdered) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            error: `สินค้า ${poItem.product_code} ต้องมี Serial ${qtyOrdered} ชิ้น (ส่งมา ${serials.length})`
+          });
+        }
+
+        for (let i = 0; i < serials.length; i++) {
+          if (!serials[i].serial_no || !String(serials[i].serial_no).trim()) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              error: `สินค้า ${poItem.product_code} ชิ้นที่ ${i + 1}: Serial ว่าง`
+            });
+          }
+        }
+
+        const seen = new Set();
+        for (const s of serials) {
+          const sn = String(s.serial_no).trim();
+          if (seen.has(sn)) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ error: `Serial ซ้ำใน PO นี้: ${sn}` });
+          }
+          seen.add(sn);
+        }
+
+        for (const s of serials) {
+          const sn = String(s.serial_no).trim();
+          const dup = await client.query(
+            `SELECT id FROM product_serials WHERE product_id = $1 AND serial_no = $2`,
+            [poItem.product_id, sn]
+          );
+          if (dup.rows.length > 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              error: `Serial "${sn}" มีอยู่แล้วในระบบ (สินค้า ${poItem.product_code})`
+            });
+          }
+        }
+
+        for (const s of serials) {
+          await client.query(
+            `INSERT INTO product_serials
+               (product_id, serial_no, mac_address, status, po_id, notes, created_at)
+             VALUES ($1, $2, $3, 'available', $4, $5, NOW())`,
+            [
+              poItem.product_id,
+              String(s.serial_no).trim(),
+              s.mac_address ? String(s.mac_address).trim() : null,
+              id,
+              s.notes || null
+            ]
+          );
+        }
+
+        await client.query(
+          `UPDATE products
+           SET stock_qty = CASE WHEN stock_qty IS NULL OR stock_qty::text = 'NaN' THEN 0 ELSE stock_qty END + $1, updated_at = NOW()
+           WHERE id = $2`,
+          [qtyOrdered, poItem.product_id]
+        );
+        await client.query(
+          `UPDATE po_items SET received_qty = $1 WHERE id = $2`,
+          [qtyOrdered, poItem.id]
+        );
+
+        try {
+          await client.query(
+            `INSERT INTO stock_movements
+               (product_id, movement_type, quantity, reference_type, reference_id, notes, created_by, created_at)
+             VALUES ($1, 'in', $2, 'po', $3, $4, $5, NOW())`,
+            [poItem.product_id, qtyOrdered, id, `รับจาก PO ${po.po_number}`, req.user.id]
+          );
+        } catch (e) {
+          console.warn('stock_movement log skipped:', e.message);
+        }
+
+      } else if (productType === 'non_stock') {
+        await client.query(
+          `UPDATE products
+           SET stock_qty = CASE WHEN stock_qty IS NULL OR stock_qty::text = 'NaN' THEN 0 ELSE stock_qty END + $1, updated_at = NOW()
+           WHERE id = $2`,
+          [qtyOrdered, poItem.product_id]
+        );
+        await client.query(
+          `UPDATE po_items SET received_qty = $1 WHERE id = $2`,
+          [qtyOrdered, poItem.id]
+        );
+
+        try {
+          await client.query(
+            `INSERT INTO stock_movements
+               (product_id, movement_type, quantity, reference_type, reference_id, notes, created_by, created_at)
+             VALUES ($1, 'in', $2, 'po', $3, $4, $5, NOW())`,
+            [poItem.product_id, qtyOrdered, id, `รับจาก PO ${po.po_number}`, req.user.id]
+          );
+        } catch (e) {
+          console.warn('stock_movement log skipped:', e.message);
+        }
+
+      } else {
+        // service
+        await client.query(
+          `UPDATE po_items SET received_qty = $1 WHERE id = $2`,
+          [qtyOrdered, poItem.id]
+        );
+      }
+    }
+
+    await client.query(
+      `UPDATE purchase_orders
+       SET status = 'received', received_by = $1, received_at = NOW(), updated_at = NOW()
+       WHERE id = $2`,
+      [req.user.id, id]
+    );
+
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'รับสินค้าเรียบร้อย' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('POST /purchase-orders/:id/receive error:', err);
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/* ========== CANCEL PO ========== */
+router.post('/:id/cancel', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await query(
+      `UPDATE purchase_orders
+       SET status = 'cancelled', updated_at = NOW()
+       WHERE id = $1 AND status IN ('draft', 'approved')
+       RETURNING *`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: 'ยกเลิกไม่ได้ (อาจรับสินค้าแล้วหรือยกเลิกไปแล้ว)' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('POST /purchase-orders/:id/cancel error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ========== DELETE PO (เฉพาะ draft) ========== */
 router.delete('/:id', authenticate, async (req, res) => {
   try {
-    const result = await query("DELETE FROM purchase_orders WHERE id = $1 AND status = 'draft' RETURNING id", [req.params.id]);
-    if (!result.rows.length) return res.status(400).json({ error: 'ลบได้เฉพาะร่าง' });
-    res.json({ message: 'ลบสำเร็จ' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+    const { id } = req.params;
+    const check = await query(`SELECT status FROM purchase_orders WHERE id = $1`, [id]);
+    if (check.rows.length === 0) return res.status(404).json({ error: 'PO not found' });
+    if (check.rows[0].status !== 'draft') {
+      return res.status(400).json({ error: 'ลบได้เฉพาะ PO สถานะ draft' });
+    }
+    await query(`DELETE FROM purchase_orders WHERE id = $1`, [id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('DELETE /purchase-orders/:id error:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;
