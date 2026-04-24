@@ -5,12 +5,19 @@ const JWT_SECRET = process.env.JWT_SECRET || 'default_secret';
 
 const authenticate = async (req, res, next) => {
   try {
+    // Accept token from Authorization header OR ?t= query string (for <a> download links)
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    let token = null;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.split(' ')[1];
+    } else if (req.query.t) {
+      token = req.query.t;
+    }
+
+    if (!token) {
       return res.status(401).json({ error: 'No token provided' });
     }
 
-    const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
 
     const result = await query(
