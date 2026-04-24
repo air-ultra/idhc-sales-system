@@ -196,7 +196,7 @@ function CreateStaffModal({ departments, onClose, onCreated }) {
     catch (err) { setError(err.message); } finally { setLoading(false); }
   };
   return (
-    <div style={styles.overlay} onClick={onClose}><div style={styles.modal} onClick={e => e.stopPropagation()}>
+    <div style={styles.overlay}><div style={styles.modal} onClick={e => e.stopPropagation()}>
       <div style={styles.modalHeader}><span style={styles.modalTitle}>เพิ่มพนักงานใหม่</span><button onClick={onClose} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button></div>
       <div style={styles.modalBody}>
         {error && <div style={styles.error}>{error}</div>}
@@ -1201,7 +1201,7 @@ function PayrollPage() {
 
       {/* Add Staff Modal */}
       {showAddStaff && (
-        <div style={styles.overlay} onClick={() => setShowAddStaff(false)}>
+        <div style={styles.overlay}>
           <div style={{ ...styles.modal, width: 480 }} onClick={e => e.stopPropagation()}>
             <div style={styles.modalHeader}><span style={styles.modalTitle}>เพิ่มพนักงานในรายการเดือนนี้</span><button onClick={() => setShowAddStaff(false)} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button></div>
             <div style={styles.modalBody}>
@@ -1430,7 +1430,7 @@ function CreateUserModal({ roles, staffList, onClose, onCreated }) {
     catch (err) { setError(err.message); } finally { setLoading(false); }
   };
   return (
-    <div style={styles.overlay} onClick={onClose}><div style={styles.modal} onClick={e => e.stopPropagation()}>
+    <div style={styles.overlay}><div style={styles.modal} onClick={e => e.stopPropagation()}>
       <div style={styles.modalHeader}><span style={styles.modalTitle}>เพิ่มผู้ใช้ใหม่</span><button onClick={onClose} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button></div>
       <div style={styles.modalBody}>
         {error && <div style={styles.error}>{error}</div>}
@@ -1471,7 +1471,7 @@ function EditUserModal({ user, roles, staffList, onClose, onSaved }) {
     catch (err) { setError(err.message); } finally { setLoading(false); }
   };
   return (
-    <div style={styles.overlay} onClick={onClose}><div style={styles.modal} onClick={e => e.stopPropagation()}>
+    <div style={styles.overlay}><div style={styles.modal} onClick={e => e.stopPropagation()}>
       <div style={styles.modalHeader}><span style={styles.modalTitle}>แก้ไขผู้ใช้: {user.username}</span><button onClick={onClose} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button></div>
       <div style={styles.modalBody}>
         {error && <div style={styles.error}>{error}</div>}
@@ -1515,7 +1515,7 @@ function ResetPasswordModal({ user, onClose, onDone }) {
     catch (err) { setError(err.message); } finally { setLoading(false); }
   };
   return (
-    <div style={styles.overlay} onClick={onClose}><div style={{ ...styles.modal, width: 400 }} onClick={e => e.stopPropagation()}>
+    <div style={styles.overlay}><div style={{ ...styles.modal, width: 400 }} onClick={e => e.stopPropagation()}>
       <div style={styles.modalHeader}><span style={styles.modalTitle}>รีเซ็ตรหัสผ่าน: {user.username}</span><button onClick={onClose} style={{ background: 'none', fontSize: 20, color: '#888' }}>✕</button></div>
       <div style={styles.modalBody}>
         {error && <div style={styles.error}>{error}</div>}
@@ -1649,7 +1649,7 @@ function WithholdingTaxPage() {
       </div>
 
       {showForm && (
-        <div style={styles.overlay} onClick={()=>setShowForm(false)}>
+        <div style={styles.overlay}>
           <div style={{...styles.modal,width:750}} onClick={e=>e.stopPropagation()}>
             <div style={styles.modalHeader}><span style={styles.modalTitle}>{editId?'แก้ไขเอกสาร':'สร้างเอกสารหัก ณ ที่จ่าย'}</span><button onClick={()=>{setShowForm(false);setEditId(null);}} style={{background:'none',fontSize:20,color:'#888'}}>✕</button></div>
             <div style={styles.modalBody}>
@@ -1934,7 +1934,7 @@ function ProductFormModal({ product, categories, onClose, onSaved }) {
   };
 
   return (
-    <div style={styles.overlay} onClick={onClose}>
+    <div style={styles.overlay}>
       <div style={styles.modal} onClick={e => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <div style={styles.modalTitle}>{product ? 'แก้ไขสินค้า' : 'เพิ่มสินค้า'}</div>
@@ -2131,7 +2131,7 @@ function AddSerialModal({ productId, onClose, onSaved }) {
     onSaved();
   };
   return (
-    <div style={styles.overlay} onClick={onClose}>
+    <div style={styles.overlay}>
       <div style={{ ...styles.modal, width: 460 }} onClick={e => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <div style={styles.modalTitle}>เพิ่ม Serial (ไม่ผ่าน PO)</div>
@@ -2187,7 +2187,7 @@ function SupplierFormModal({ supplier, onClose, onSaved }) {
     onSaved();
   };
   return (
-    <div style={styles.overlay} onClick={onClose}>
+    <div style={styles.overlay}>
       <div style={styles.modal} onClick={e => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <div style={styles.modalTitle}>{supplier ? 'แก้ไขผู้จำหน่าย' : 'เพิ่มผู้จำหน่าย'}</div>
@@ -2441,7 +2441,7 @@ function POFormModal({ onClose, onSaved }) {
   };
 
   return (
-    <div style={styles.overlay} onClick={onClose}>
+    <div style={styles.overlay}>
       <div style={{ ...styles.modal, width: 820 }} onClick={e => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <div style={styles.modalTitle}>สร้างใบสั่งซื้อ</div>
