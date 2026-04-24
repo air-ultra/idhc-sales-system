@@ -1826,7 +1826,7 @@ function StockPage() {
                       <td style={styles.td}>{productTypeBadge(p.product_type)}</td>
                       <td style={styles.td}>{p.category_name || '-'}</td>
                       <td style={styles.td}>{p.default_unit}</td>
-                      <td style={{ ...styles.td, textAlign: 'right' }}>{Number(p.cost_price || 0).toLocaleString()}</td>
+                      <td style={{ ...styles.td, textAlign: 'right' }}>{Number(p.avg_cost || p.cost_price || 0).toLocaleString("th-TH", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
                       <td style={{ ...styles.td, textAlign: 'right' }}>
                         {p.product_type === 'service' ? '-' : Number(p.stock_qty || 0).toLocaleString()}
                       </td>
@@ -2053,10 +2053,11 @@ function ProductDetailModal({ product, onClose }) {
               <div style={{ maxHeight: 400, overflowY: 'auto' }}>
                 <table style={styles.table}>
                   <thead>
-                    <tr>
+<tr>
                       <th style={styles.th}>Serial No.</th>
                       <th style={styles.th}>MAC Address</th>
                       <th style={styles.th}>สถานะ</th>
+                      <th style={{ ...styles.th, textAlign: 'right' }}>ต้นทุน</th>
                       <th style={styles.th}>PO</th>
                       <th style={styles.th}>วันที่รับ</th>
                       <th style={styles.th}>ผู้จำหน่าย</th>
@@ -2068,7 +2069,10 @@ function ProductDetailModal({ product, onClose }) {
                       <tr key={s.id}>
                         <td style={styles.td}><code>{s.serial_no}</code></td>
                         <td style={styles.td}>{s.mac_address || '-'}</td>
-                        <td style={styles.td}>{statusBadge(s.status)}</td>
+<td style={styles.td}>{statusBadge(s.status)}</td>
+                        <td style={{ ...styles.td, textAlign: 'right' }}>
+                          {Number(s.cost_price || 0).toLocaleString()}
+                        </td>
                         <td style={styles.td}>
                           {s.po_number || <span style={{ color: '#9ca3af', fontSize: 12 }}>เพิ่มมือ</span>}
                         </td>
@@ -2083,7 +2087,7 @@ function ProductDetailModal({ product, onClose }) {
                       </tr>
                     ))}
                     {serials.length === 0 && (
-                      <tr><td style={{ ...styles.td, textAlign: 'center', color: '#888', padding: 30 }} colSpan="7">
+                      <tr><td style={{ ...styles.td, textAlign: 'center', color: '#888', padding: 30 }} colSpan="8">
                         ยังไม่มี Serial — สร้าง PO แล้วกด "รับสินค้า" เพื่อบันทึก Serial
                       </td></tr>
                     )}

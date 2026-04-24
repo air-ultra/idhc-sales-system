@@ -1,7 +1,7 @@
-// backend/src/routes/purchase-orders.js
+// backend/src/routes/purchaseOrders.js
 const express = require('express');
 const { query, getClient } = require('../config/database');
-const { authenticate, requirePermission } = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 const router = express.Router();
 
 /* ========== GET all POs ========== */
@@ -70,7 +70,6 @@ router.post('/', authenticate, async (req, res) => {
 
     await client.query('BEGIN');
 
-    // gen po_number: PO{YYYY}{MM}{NNNN} — running reset ทุกเดือน
     const now = new Date();
     const yyyy = now.getFullYear();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -87,7 +86,6 @@ router.post('/', authenticate, async (req, res) => {
     }
     const po_number = `${prefix}${String(nextNum).padStart(4, '0')}`;
 
-    // totals
     let total_amount = 0;
     items.forEach(it => {
       total_amount += Number(it.quantity || 0) * Number(it.unit_price || 0);
@@ -148,7 +146,7 @@ router.post('/:id/approve', authenticate, async (req, res) => {
   }
 });
 
-/* ========== RECEIVE PO (with serials) ========== */
+/* ========== RECEIVE PO (with serials + cost_price per serial) ========== */
 router.post('/:id/receive', authenticate, async (req, res) => {
   const client = await getClient();
   try {
@@ -193,6 +191,7 @@ router.post('/:id/receive', authenticate, async (req, res) => {
 
       const productType = poItem.product_type || 'stock';
       const qtyOrdered = Number(poItem.quantity);
+      const unitCost = Number(poItem.unit_price); // ⭐ ต้นทุนจาก PO item
 
       if (productType === 'stock') {
         const serials = it.serials || [];
@@ -236,16 +235,18 @@ router.post('/:id/receive', authenticate, async (req, res) => {
           }
         }
 
+        // ⭐ insert serial พร้อม cost_price ตาม unit_price ของ PO
         for (const s of serials) {
           await client.query(
             `INSERT INTO product_serials
-               (product_id, serial_no, mac_address, status, po_id, notes, created_at)
-             VALUES ($1, $2, $3, 'available', $4, $5, NOW())`,
+               (product_id, serial_no, mac_address, status, po_id, cost_price, notes, created_at)
+             VALUES ($1, $2, $3, 'available', $4, $5, $6, NOW())`,
             [
               poItem.product_id,
               String(s.serial_no).trim(),
               s.mac_address ? String(s.mac_address).trim() : null,
               id,
+              unitCost,
               s.notes || null
             ]
           );
@@ -253,7 +254,8 @@ router.post('/:id/receive', authenticate, async (req, res) => {
 
         await client.query(
           `UPDATE products
-           SET stock_qty = CASE WHEN stock_qty IS NULL OR stock_qty::text = 'NaN' THEN 0 ELSE stock_qty END + $1, updated_at = NOW()
+           SET stock_qty = CASE WHEN stock_qty IS NULL OR stock_qty::text = 'NaN' THEN 0 ELSE stock_qty END + $1,
+               updated_at = NOW()
            WHERE id = $2`,
           [qtyOrdered, poItem.product_id]
         );
@@ -276,7 +278,8 @@ router.post('/:id/receive', authenticate, async (req, res) => {
       } else if (productType === 'non_stock') {
         await client.query(
           `UPDATE products
-           SET stock_qty = CASE WHEN stock_qty IS NULL OR stock_qty::text = 'NaN' THEN 0 ELSE stock_qty END + $1, updated_at = NOW()
+           SET stock_qty = CASE WHEN stock_qty IS NULL OR stock_qty::text = 'NaN' THEN 0 ELSE stock_qty END + $1,
+               updated_at = NOW()
            WHERE id = $2`,
           [qtyOrdered, poItem.product_id]
         );
@@ -297,7 +300,6 @@ router.post('/:id/receive', authenticate, async (req, res) => {
         }
 
       } else {
-        // service
         await client.query(
           `UPDATE po_items SET received_qty = $1 WHERE id = $2`,
           [qtyOrdered, poItem.id]

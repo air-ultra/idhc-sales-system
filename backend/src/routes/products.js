@@ -1,10 +1,13 @@
 // backend/src/routes/products.js
 const express = require('express');
 const { query } = require('../config/database');
-const { authenticate, requirePermission } = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 const router = express.Router();
 
-/* ========== LIST ========== */
+/* ========== LIST ==========
+   avg_cost: สำหรับสินค้า stock ใช้ AVG(cost_price) ของ serial available
+             สำหรับประเภทอื่นใช้ products.cost_price
+================================================== */
 router.get('/', authenticate, async (req, res) => {
   try {
     const { product_type, category_id, search } = req.query;
@@ -27,7 +30,18 @@ router.get('/', authenticate, async (req, res) => {
 
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const result = await query(
-      `SELECT p.*, c.name AS category_name
+      `SELECT
+         p.*,
+         c.name AS category_name,
+         CASE
+           WHEN p.product_type = 'stock' THEN
+             COALESCE((
+               SELECT AVG(cost_price)
+               FROM product_serials
+               WHERE product_id = p.id AND status = 'available' AND cost_price > 0
+             ), p.cost_price, 0)
+           ELSE p.cost_price
+         END AS avg_cost
        FROM products p
        LEFT JOIN product_categories c ON c.id = p.category_id
        ${whereClause}
@@ -46,7 +60,18 @@ router.get('/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
     const result = await query(
-      `SELECT p.*, c.name AS category_name
+      `SELECT
+         p.*,
+         c.name AS category_name,
+         CASE
+           WHEN p.product_type = 'stock' THEN
+             COALESCE((
+               SELECT AVG(cost_price)
+               FROM product_serials
+               WHERE product_id = p.id AND status = 'available' AND cost_price > 0
+             ), p.cost_price, 0)
+           ELSE p.cost_price
+         END AS avg_cost
        FROM products p
        LEFT JOIN product_categories c ON c.id = p.category_id
        WHERE p.id = $1`,
@@ -60,7 +85,7 @@ router.get('/:id', authenticate, async (req, res) => {
   }
 });
 
-/* ========== GET serials of a product (with PO info) ========== */
+/* ========== GET serials (with cost_price + PO info) ========== */
 router.get('/:id/serials', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
@@ -85,11 +110,11 @@ router.get('/:id/serials', authenticate, async (req, res) => {
   }
 });
 
-/* ========== ADD serial manually (fallback) ========== */
+/* ========== ADD serial manually ========== */
 router.post('/:id/serials', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
-    const { serial_no, mac_address, notes } = req.body;
+    const { serial_no, mac_address, cost_price, notes } = req.body;
     if (!serial_no || !String(serial_no).trim()) {
       return res.status(400).json({ error: 'serial_no required' });
     }
@@ -103,13 +128,17 @@ router.post('/:id/serials', authenticate, async (req, res) => {
     }
 
     const result = await query(
-      `INSERT INTO product_serials (product_id, serial_no, mac_address, status, notes)
-       VALUES ($1, $2, $3, 'available', $4)
+      `INSERT INTO product_serials (product_id, serial_no, mac_address, status, cost_price, notes)
+       VALUES ($1, $2, $3, 'available', $4, $5)
        RETURNING *`,
-      [id, String(serial_no).trim(), mac_address || null, notes || null]
+      [id, String(serial_no).trim(), mac_address || null,
+       Number(cost_price || 0), notes || null]
     );
     await query(
-      `UPDATE products SET stock_qty = CASE WHEN stock_qty IS NULL OR stock_qty::text = 'NaN' THEN 0 ELSE stock_qty END + 1, updated_at = NOW() WHERE id = $1`,
+      `UPDATE products
+       SET stock_qty = CASE WHEN stock_qty IS NULL OR stock_qty::text = 'NaN' THEN 0 ELSE stock_qty END + 1,
+           updated_at = NOW()
+       WHERE id = $1`,
       [id]
     );
     res.status(201).json(result.rows[0]);
@@ -129,7 +158,10 @@ router.delete('/:id/serials/:serialId', authenticate, async (req, res) => {
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Serial not found' });
     await query(
-      `UPDATE products SET stock_qty = GREATEST(CASE WHEN stock_qty IS NULL OR stock_qty::text = 'NaN' THEN 0 ELSE stock_qty END - 1, 0), updated_at = NOW() WHERE id = $1`,
+      `UPDATE products
+       SET stock_qty = GREATEST(CASE WHEN stock_qty IS NULL OR stock_qty::text = 'NaN' THEN 0 ELSE stock_qty END - 1, 0),
+           updated_at = NOW()
+       WHERE id = $1`,
       [id]
     );
     res.json({ success: true });
@@ -139,7 +171,7 @@ router.delete('/:id/serials/:serialId', authenticate, async (req, res) => {
   }
 });
 
-/* ========== CREATE ========== */
+/* ========== CREATE product ========== */
 router.post('/', authenticate, async (req, res) => {
   try {
     const {
@@ -174,7 +206,7 @@ router.post('/', authenticate, async (req, res) => {
   }
 });
 
-/* ========== UPDATE ========== */
+/* ========== UPDATE product ========== */
 router.put('/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
@@ -207,7 +239,7 @@ router.put('/:id', authenticate, async (req, res) => {
   }
 });
 
-/* ========== DELETE ========== */
+/* ========== DELETE product ========== */
 router.delete('/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
