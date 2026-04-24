@@ -2034,7 +2034,7 @@ function ProductDetailModal({ product, onClose }) {
           <div>
             <div style={styles.modalTitle}>{product.product_code} — {product.name}</div>
             <div style={{ ...styles.detailSub, marginTop: 4 }}>
-              Model: {product.model || '-'} · หมวด: {product.category_name || '-'} · คงเหลือ: {product.stock_qty || 0}
+              Model: {product.model || '-'} · หมวด: {product.category_name || '-'} · คงเหลือ: {Number(product.stock_qty || 0).toLocaleString()}
             </div>
           </div>
           <button style={{ ...styles.btn(), padding: '4px 10px' }} onClick={onClose}>✕</button>
@@ -2393,18 +2393,21 @@ function PurchaseOrderPage() {
 function POFormModal({ onClose, onSaved }) {
   const [suppliers, setSuppliers] = React.useState([]);
   const [products, setProducts] = React.useState([]);
-  const [form, setForm] = React.useState({
+const [form, setForm] = React.useState({
     supplier_id: '', po_date: new Date().toISOString().slice(0, 10),
     notes: '', vat_rate: 7,
+    ordered_by_staff_id: '', job_name: '', credit_days: 30, wht_rate: 0,
   });
-  const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น' }]);
+const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น' }]);
+  const [staffList, setStaffList] = React.useState([]);
   const [err, setErr] = React.useState('');
-
   React.useEffect(() => {
     fetch('/api/suppliers', { headers: authHeaders() }).then(r => r.json())
       .then(d => setSuppliers(Array.isArray(d) ? d : []));
     fetch('/api/products', { headers: authHeaders() }).then(r => r.json())
       .then(d => setProducts(Array.isArray(d) ? d : []));
+    fetch('/api/staff?limit=500', { headers: authHeaders() }).then(r => r.json())
+      .then(d => setStaffList(Array.isArray(d) ? d : (d.data || [])));
   }, []);
 
   const addItem = () => setItems([...items, { product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น' }]);
@@ -2464,12 +2467,54 @@ function POFormModal({ onClose, onSaved }) {
               <input type="date" style={styles.input} value={form.po_date}
                 onChange={e => setForm(f => ({ ...f, po_date: e.target.value }))} />
             </div>
+<div>
+              <label style={styles.label}>ผู้สั่งซื้อ</label>
+              <select style={styles.input} value={form.ordered_by_staff_id || ''}
+                onChange={e => setForm(f => ({ ...f, ordered_by_staff_id: e.target.value }))}>
+                <option value="">-- เลือก --</option>
+                {staffList.map(s => (
+                  <option key={s.id} value={s.id}>
+                    {s.first_name_th} {s.last_name_th}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={styles.label}>ชื่องาน</label>
+              <input style={styles.input} value={form.job_name || ''}
+                onChange={e => setForm(f => ({ ...f, job_name: e.target.value }))}
+                placeholder="เช่น Cer บำรุงราษฎร์" />
+            </div>
+            <div>
+              <label style={styles.label}>เครดิต (วัน)</label>
+              <input type="number" style={styles.input} value={form.credit_days || 0}
+                onChange={e => setForm(f => ({ ...f, credit_days: e.target.value }))} />
+            </div>
+            <div>
+              <label style={styles.label}>ครบกำหนด</label>
+              <input style={{ ...styles.input, background: '#f9fafb', color: '#6b7280' }}
+                value={(() => {
+                  if (!form.po_date) return '';
+                  const d = new Date(form.po_date);
+                  d.setDate(d.getDate() + Number(form.credit_days || 0));
+                  return d.toLocaleDateString('th-TH');
+                })()} readOnly />
+            </div>
             <div style={{ gridColumn: 'span 2' }}>
               <label style={styles.label}>หมายเหตุ</label>
               <input style={styles.input} value={form.notes || ''}
                 onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
             </div>
-            <div style={{ gridColumn: 'span 2' }}>
+            <div>
+              <label style={styles.label}>หัก ณ ที่จ่าย %</label>
+              <select style={styles.input} value={form.wht_rate || 0}
+                onChange={e => setForm(f => ({ ...f, wht_rate: Number(e.target.value) }))}>
+                <option value={0}>ไม่หัก</option>
+                <option value={1}>1% (ค่าขนส่ง)</option>
+                <option value={3}>3% (บริการทั่วไป)</option>
+                <option value={5}>5% (ค่าเช่า)</option>
+              </select>
+            </div>            <div style={{ gridColumn: 'span 2' }}>
               <label style={styles.label}>VAT</label>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button type="button"
@@ -2568,7 +2613,52 @@ function PODetailModal({ poId, onClose, onReceive }) {
     fetch(`/api/purchase-orders/${poId}`, { headers: authHeaders() })
       .then(r => r.json()).then(setPo);
   };
-  React.useEffect(load, [poId]);
+  const [docs, setDocs] = React.useState([]);
+  const [uploading, setUploading] = React.useState(false);
+  const fileInputRef = React.useRef(null);
+  const loadDocs = () => {
+    fetch(`/api/purchase-orders/${poId}/documents`, { headers: authHeaders() })
+      .then(r => r.json()).then(d => setDocs(Array.isArray(d) ? d : []));
+  };
+  React.useEffect(() => { load(); loadDocs(); }, [poId]);
+
+  const uploadFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploading(true);
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const res = await fetch(`/api/purchase-orders/${poId}/documents`, {
+        method: 'POST', headers: authHeaders(), body: fd
+      });
+      if (res.ok) loadDocs();
+      else {
+        const d = await res.json().catch(() => ({}));
+        alert('อัปโหลดไม่สำเร็จ: ' + (d.error || res.statusText));
+      }
+    } catch (err) {
+      alert('อัปโหลดไม่สำเร็จ: ' + err.message);
+    }
+    setUploading(false);
+    e.target.value = '';
+  };
+
+  const deleteDoc = async (docId, fileName) => {
+    if (!confirm(`ยืนยันลบไฟล์ "${fileName}"?`)) return;
+    const res = await fetch(`/api/purchase-orders/${poId}/documents/${docId}`, {
+      method: 'DELETE', headers: authHeaders()
+    });
+    if (res.ok) loadDocs();
+    else alert('ลบไม่สำเร็จ');
+  };
+
+  const fmtSize = (n) => {
+    if (!n) return '-';
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1048576).toFixed(1) + ' MB';
+  };
 
   if (!po) return null;
 
@@ -2595,9 +2685,33 @@ function PODetailModal({ poId, onClose, onReceive }) {
             <div style={styles.modalTitle}>PO: {po.po_number}</div>
             <div style={{ ...styles.detailSub, marginTop: 4 }}>
               ผู้จำหน่าย: {po.supplier_name} · วันที่: {new Date(po.po_date).toLocaleDateString('th-TH')}
+              {po.credit_days > 0 && (
+                <> · เครดิต {po.credit_days} วัน · ครบกำหนด {po.due_date ? new Date(po.due_date).toLocaleDateString('th-TH') : '-'}</>
+              )}
             </div>
+            {(po.ordered_by_name || po.job_name) && (
+              <div style={{ ...styles.detailSub, marginTop: 2 }}>
+                {po.ordered_by_name && <>ผู้สั่งซื้อ: {po.ordered_by_name}</>}
+                {po.ordered_by_name && po.job_name && ' · '}
+                {po.job_name && <>ชื่องาน: {po.job_name}</>}
+              </div>
+            )}
           </div>
-          <button style={{ ...styles.btn(), padding: '4px 10px' }} onClick={onClose}>✕</button>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+            {po.payment_status === 'paid' ? (
+              <span style={{ ...styles.badge('green'), padding: '6px 10px' }}>✓ ชำระแล้ว</span>
+            ) : po.status === 'received' ? (
+              <button style={{ ...styles.btn('success'), padding: '6px 12px', fontSize: 13 }}
+                onClick={() => alert('ฟังก์ชันจ่ายเงินจะเปิดใช้งานในรอบถัดไปค่ะพี่ 🙏')}>
+                💳 จ่ายเงิน
+              </button>
+            ) : null}
+            <button style={{ ...styles.btn('primary'), padding: '6px 12px', fontSize: 13 }}
+              onClick={() => window.open(`/api/purchase-orders/${poId}/pdf?t=${localStorage.getItem('token')}`, '_blank')}>
+              🖨️ พิมพ์ PDF
+            </button>
+            <button style={{ ...styles.btn(), padding: '4px 10px' }} onClick={onClose}>✕</button>
+          </div>
         </div>
         <div style={styles.modalBody}>
           <table style={styles.table}>
@@ -2630,15 +2744,83 @@ function PODetailModal({ poId, onClose, onReceive }) {
               ))}
             </tbody>
           </table>
+<div style={{
+          marginTop: 20, padding: 16, background: '#fafbfc', borderRadius: 8,
+          textAlign: 'right', lineHeight: 1.8
+        }}>
+          <div>ยอดก่อน VAT: <b>{Number(po.total_amount).toLocaleString()}</b></div>
+          <div>VAT {po.vat_rate}%: <b>{Number(po.vat_amount).toLocaleString()}</b></div>
+          <div style={{ fontSize: 18 }}>ยอดสุทธิ: <b style={{ color: '#059669' }}>{Number(po.grand_total).toLocaleString()}</b></div>
+          {Number(po.wht_amount) > 0 && (
+            <>
+              <div style={{ borderTop: '1px solid #e5e7eb', margin: '8px 0' }}></div>
+              <div>หักภาษี ณ ที่จ่าย {po.wht_rate}%: <b>{Number(po.wht_amount).toLocaleString()}</b></div>
+              <div style={{ fontSize: 18 }}>ยอดชำระ: <b style={{ color: '#c41556' }}>{(Number(po.grand_total) - Number(po.wht_amount)).toLocaleString()}</b></div>
+            </>
+          )}
+        </div>
 
-          <div style={{
-            marginTop: 20, padding: 16, background: '#fafbfc', borderRadius: 8,
-            textAlign: 'right', lineHeight: 1.8
-          }}>
-            <div style={{ fontSize: 14 }}>ยอดก่อน VAT: <b>{Number(po.total_amount).toLocaleString()}</b></div>
-            <div style={{ fontSize: 14 }}>VAT {po.vat_rate}%: <b>{Number(po.vat_amount).toLocaleString()}</b></div>
-            <div style={{ fontSize: 18, marginTop: 4 }}>ยอดสุทธิ: <b style={{ color: '#059669' }}>{Number(po.grand_total).toLocaleString()}</b></div>
+        {/* ═══ เอกสารแนบ ═══ */}
+        <div style={{ marginTop: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: '#1e3a5f' }}>
+              📎 เอกสารแนบ {docs.length > 0 && <span style={{ color: '#6b7280', fontWeight: 400, fontSize: 13 }}>({docs.length})</span>}
+            </div>
+            <input ref={fileInputRef} type="file" style={{ display: 'none' }}
+              onChange={uploadFile}
+              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx" />
+            <button style={styles.btn('primary')} disabled={uploading}
+              onClick={() => fileInputRef.current?.click()}>
+              {uploading ? 'กำลังอัปโหลด...' : '+ แนบไฟล์'}
+            </button>
           </div>
+          {docs.length === 0 ? (
+            <div style={{
+              padding: 20, textAlign: 'center', color: '#9ca3af',
+              background: '#fafbfc', borderRadius: 8, fontSize: 14
+            }}>
+              ยังไม่มีเอกสารแนบ · รองรับ PDF, รูปภาพ, Word, Excel (สูงสุด 20 MB)
+            </div>
+          ) : (
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <th style={styles.th}>ชื่อไฟล์</th>
+                  <th style={{ ...styles.th, width: 90, textAlign: 'right' }}>ขนาด</th>
+                  <th style={{ ...styles.th, width: 130 }}>วันที่</th>
+                  <th style={{ ...styles.th, width: 110 }}>โดย</th>
+                  <th style={{ ...styles.th, width: 120 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {docs.map(d => (
+                  <tr key={d.id}>
+                    <td style={styles.td}>
+                      <a href={`/api/purchase-orders/${poId}/documents/${d.id}/download?t=${localStorage.getItem('token')}`}
+                        target="_blank" rel="noopener noreferrer"
+                        style={{ color: '#2563eb', textDecoration: 'none' }}>
+                        📄 {d.file_name}
+                      </a>
+                    </td>
+                    <td style={{ ...styles.td, textAlign: 'right', color: '#6b7280' }}>
+                      {fmtSize(d.file_size)}
+                    </td>
+                    <td style={{ ...styles.td, color: '#6b7280' }}>
+                      {new Date(d.uploaded_at).toLocaleDateString('th-TH')}
+                    </td>
+                    <td style={{ ...styles.td, color: '#6b7280' }}>{d.uploaded_by_name || '-'}</td>
+                    <td style={{ ...styles.td, textAlign: 'right' }}>
+                      <button style={{ ...styles.btn('danger'), padding: '4px 10px', fontSize: 12 }}
+                        onClick={() => deleteDoc(d.id, d.file_name)}>
+                        ลบ
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
         </div>
         <div style={styles.modalFooter}>
           {po.status === 'draft' && (
