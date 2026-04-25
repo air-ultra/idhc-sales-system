@@ -1,7 +1,6 @@
 const express = require('express');
 const { query } = require('../config/database');
 const { authenticate } = require('../middleware/auth');
-
 const router = express.Router();
 
 async function genSupplierCode() {
@@ -45,8 +44,8 @@ router.post('/', authenticate, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// UPDATE
-router.patch('/:id', authenticate, async (req, res) => {
+// UPDATE handler (shared by PATCH and PUT)
+const updateSupplier = async (req, res) => {
   try {
     const d = req.body;
     await query(`
@@ -60,7 +59,10 @@ router.patch('/:id', authenticate, async (req, res) => {
     const updated = await query('SELECT * FROM suppliers WHERE id = $1', [req.params.id]);
     res.json(updated.rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
-});
+};
+
+router.patch('/:id', authenticate, updateSupplier);
+router.put('/:id', authenticate, updateSupplier);
 
 // DELETE (soft)
 router.delete('/:id', authenticate, async (req, res) => {
