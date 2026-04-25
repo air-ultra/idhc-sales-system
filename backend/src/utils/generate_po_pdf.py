@@ -60,6 +60,11 @@ out_path = sys.argv[1]
 items_html = ''
 for item in data.get('items', []):
     desc = esc(item.get('description', ''))
+    wht_rate = item.get('wht_rate', 0)
+    try:
+        wht_display = f"{int(float(wht_rate))}%" if float(wht_rate) > 0 else '-'
+    except Exception:
+        wht_display = '-'
     items_html += f'''
     <tr>
       <td class="col-no">{esc(item.get('no', ''))}</td>
@@ -67,6 +72,7 @@ for item in data.get('items', []):
       <td class="col-qty">{fmt_qty(item.get('quantity', 0))}</td>
       <td class="col-price">{fmt_money(item.get('unit_price', 0))}</td>
       <td class="col-total">{fmt_money(item.get('total', 0))}</td>
+      <td class="col-wht">{wht_display}</td>
     </tr>
     '''
 
@@ -80,8 +86,6 @@ meta_rows = [
 ]
 if data.get('job_name'):
     meta_rows.append(('ชื่องาน', data.get('job_name')))
-if data.get('wht_rate') and float(data.get('wht_rate', 0)) > 0:
-    meta_rows.append(('หัก ณ ที่จ่าย', f"{data.get('wht_rate')}%"))
 
 meta_html = ''
 for label, value in meta_rows:
@@ -99,7 +103,7 @@ if data.get('show_wht'):
     wht_html = f'''
     <hr class="total-divider">
     <div class="total-row">
-      <div class="total-label">หักภาษี ณ ที่จ่าย {data.get('wht_rate', 0)}%</div>
+      <div class="total-label">หัก ณ ที่จ่าย</div>
       <div class="total-value">{fmt_money(data.get('wht_amount', 0))}</div>
       <div class="total-unit">บาท</div>
     </div>
@@ -244,13 +248,15 @@ body {{
 }}
 .items .col-no {{ width: 8mm; text-align: center; }}
 .items .col-desc {{ }}
-.items .col-qty {{ width: 16mm; text-align: right; }}
-.items .col-price {{ width: 28mm; text-align: right; white-space: nowrap; }}
-.items .col-total {{ width: 26mm; text-align: right; }}
+.items .col-qty {{ width: 15mm; text-align: right; }}
+.items .col-price {{ width: 25mm; text-align: right; white-space: nowrap; }}
+.items .col-total {{ width: 24mm; text-align: right; }}
+.items .col-wht {{ width: 11mm; text-align: center; color: #c41556; }}
 .items th.col-qty, .items th.col-price, .items th.col-total {{
   text-align: right;
 }}
-.items th.col-no {{ text-align: center; }}
+.items th.col-no, .items th.col-wht {{ text-align: center; }}
+.items th.col-wht {{ color: white; }}
 .items tbody tr {{ border-bottom: 0.3pt solid #e5e5e5; }}
 
 /* ─── TOTALS ─── */
@@ -379,6 +385,7 @@ body {{
       <th class="col-qty">จำนวน</th>
       <th class="col-price">ราคาต่อหน่วย</th>
       <th class="col-total">ยอดรวม</th>
+      <th class="col-wht">หัก</th>
     </tr>
   </thead>
   <tbody>

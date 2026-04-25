@@ -159,13 +159,19 @@ router.post('/', authenticate, async (req, res) => {
     }
     const po_number = `${prefix}${String(nextNum).padStart(4, '0')}`;
 
+    // คำนวณ total + wht ระดับ item แล้ว sum
     let total_amount = 0;
-    items.forEach(it => {
-      total_amount += Number(it.quantity || 0) * Number(it.unit_price || 0);
+    let wht_amount = 0;
+    const itemsWithCalc = items.map(it => {
+      const lineTotal = Number(it.quantity || 0) * Number(it.unit_price || 0);
+      const itemWhtRate = Number(it.wht_rate || 0);
+      const itemWhtAmount = +(lineTotal * itemWhtRate / 100).toFixed(2);
+      total_amount += lineTotal;
+      wht_amount += itemWhtAmount;
+      return { ...it, line_total: lineTotal, wht_rate: itemWhtRate, wht_amount: itemWhtAmount };
     });
     const vat_amount = total_amount * (Number(vat_rate || 0) / 100);
     const grand_total = total_amount + vat_amount;
-    const wht_amount = total_amount * (Number(wht_rate || 0) / 100);
 
     // คำนวณ due_date
     const poDateObj = new Date(po_date || new Date());
@@ -183,18 +189,18 @@ router.post('/', authenticate, async (req, res) => {
       [po_number, supplier_id, po_date || new Date(), notes || null,
        vat_rate || 0, total_amount, vat_amount, grand_total, req.user.id,
        ordered_by_staff_id || null, job_name || null,
-       credits, dueDate, wht_rate || 0, wht_amount]
+       credits, dueDate, 0, wht_amount]
     );
     const po = poRes.rows[0];
 
-    for (const it of items) {
+    for (const it of itemsWithCalc) {
       await client.query(
-        `INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price, description)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        `INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price, description, wht_rate, wht_amount)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [po.id, it.product_id, it.unit || 'ชิ้น',
-         it.quantity, it.unit_price,
-         Number(it.quantity) * Number(it.unit_price),
-         it.description || null]
+         it.quantity, it.unit_price, it.line_total,
+         it.description || null,
+         it.wht_rate, it.wht_amount]
       );
     }
 
@@ -450,6 +456,124 @@ router.post('/:id/receive', authenticate, async (req, res) => {
     res.status(500).json({ error: err.message });
   } finally {
     client.release();
+  }
+});
+
+/* ========== UPDATE PO (only when status = 'draft') ========== */
+router.put('/:id', authenticate, async (req, res) => {
+  const client = await getClient();
+  try {
+    const { id } = req.params;
+    const {
+      supplier_id, po_date, notes, vat_rate, items,
+      ordered_by_staff_id, job_name, credit_days, wht_rate
+    } = req.body;
+
+    if (!supplier_id) return res.status(400).json({ error: 'supplier_id is required' });
+    if (!items || items.length === 0) return res.status(400).json({ error: 'items are required' });
+
+    await client.query('BEGIN');
+
+    // เช็คว่า PO อยู่ใน status draft เท่านั้น
+    const check = await client.query(
+      `SELECT status FROM purchase_orders WHERE id = $1 FOR UPDATE`,
+      [id]
+    );
+    if (check.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'PO not found' });
+    }
+    if (check.rows[0].status !== 'draft') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'แก้ไขได้เฉพาะ PO สถานะ "ร่าง" เท่านั้น' });
+    }
+
+    // คำนวณยอดใหม่ + wht ระดับ item
+    let total_amount = 0;
+    let wht_amount = 0;
+    const itemsWithCalc = items.map(it => {
+      const lineTotal = Number(it.quantity || 0) * Number(it.unit_price || 0);
+      const itemWhtRate = Number(it.wht_rate || 0);
+      const itemWhtAmount = +(lineTotal * itemWhtRate / 100).toFixed(2);
+      total_amount += lineTotal;
+      wht_amount += itemWhtAmount;
+      return { ...it, line_total: lineTotal, wht_rate: itemWhtRate, wht_amount: itemWhtAmount };
+    });
+    const vat_amount = total_amount * (Number(vat_rate || 0) / 100);
+    const grand_total = total_amount + vat_amount;
+
+    // คำนวณ due_date ใหม่
+    const poDateObj = new Date(po_date || new Date());
+    const credits = Number(credit_days || 0);
+    const dueDate = new Date(poDateObj.getTime() + credits * 86400000);
+
+    // update header
+    const updRes = await client.query(
+      `UPDATE purchase_orders SET
+         supplier_id = $1, po_date = $2, notes = $3, vat_rate = $4,
+         total_amount = $5, vat_amount = $6, grand_total = $7,
+         ordered_by_staff_id = $8, job_name = $9,
+         credit_days = $10, due_date = $11, wht_rate = $12, wht_amount = $13,
+         updated_at = NOW()
+       WHERE id = $14 AND status = 'draft'
+       RETURNING *`,
+      [supplier_id, po_date || new Date(), notes || null, vat_rate || 0,
+       total_amount, vat_amount, grand_total,
+       ordered_by_staff_id || null, job_name || null,
+       credits, dueDate, 0, wht_amount, id]
+    );
+
+    if (updRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'อัปเดตไม่สำเร็จ' });
+    }
+
+    // ลบ items เก่าทั้งหมด แล้ว insert ใหม่
+    await client.query(`DELETE FROM po_items WHERE po_id = $1`, [id]);
+
+    for (const it of itemsWithCalc) {
+      await client.query(
+        `INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price, description, wht_rate, wht_amount)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [id, it.product_id, it.unit || 'ชิ้น',
+         it.quantity, it.unit_price, it.line_total,
+         it.description || null,
+         it.wht_rate, it.wht_amount]
+      );
+    }
+
+    await client.query('COMMIT');
+    res.json(updRes.rows[0]);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('PUT /purchase-orders/:id error:', err);
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+/* ========== UNAPPROVE PO (revert approved → draft) ========== */
+router.post('/:id/unapprove', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await query(
+      `UPDATE purchase_orders
+       SET status = 'draft',
+           approved_by = NULL,
+           approved_at = NULL,
+           updated_at = NOW()
+       WHERE id = $1 AND status = 'approved'
+       RETURNING *`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: 'ยกเลิกอนุมัติได้เฉพาะ PO ที่สถานะ "อนุมัติแล้ว" เท่านั้น (PO ที่รับสินค้าแล้วไม่สามารถยกเลิกได้)' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('POST /purchase-orders/:id/unapprove error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -746,6 +870,7 @@ router.get('/:id/pdf', authenticate, async (req, res) => {
         quantity: Number(it.quantity),
         unit_price: Number(it.unit_price),
         total: Number(it.total_price),
+        wht_rate: Number(it.wht_rate || 0),
       })),
 
       // totals

@@ -2293,6 +2293,7 @@ function CategoriesTab({ categories, onReload }) {
 function PurchaseOrderPage() {
   const [orders, setOrders] = React.useState([]);
   const [showForm, setShowForm] = React.useState(false);
+  const [editPO, setEditPO] = React.useState(null);
   const [detailPO, setDetailPO] = React.useState(null);
   const [receivePO, setReceivePO] = React.useState(null);
 
@@ -2347,6 +2348,10 @@ function PurchaseOrderPage() {
                   <button style={{ ...styles.btn(), padding: '6px 12px', fontSize: 12 }}
                     onClick={() => setDetailPO(o)}>ดู</button>
                   {o.status === 'draft' && (
+                    <button style={{ ...styles.btn(), padding: '6px 12px', fontSize: 12 }}
+                      onClick={() => setEditPO(o)}>แก้ไข</button>
+                  )}
+                  {o.status === 'draft' && (
                     <button style={{ ...styles.btn('primary'), padding: '6px 12px', fontSize: 12 }}
                       onClick={async () => {
                         if (!confirm(`อนุมัติ PO ${o.po_number}?`)) return;
@@ -2375,10 +2380,16 @@ function PurchaseOrderPage() {
       {showForm && (
         <POFormModal onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); load(); }} />
       )}
+      {editPO && (
+        <POFormModal editPO={editPO}
+          onClose={() => setEditPO(null)}
+          onSaved={() => { setEditPO(null); load(); }} />
+      )}
       {detailPO && (
         <PODetailModal poId={detailPO.id}
           onClose={() => { setDetailPO(null); load(); }}
-          onReceive={(po) => { setDetailPO(null); setReceivePO(po); }} />
+          onReceive={(po) => { setDetailPO(null); setReceivePO(po); }}
+          onEdit={(po) => { setDetailPO(null); setEditPO(po); }} />
       )}
       {receivePO && (
         <ReceivePOModal poId={receivePO.id}
@@ -2390,15 +2401,36 @@ function PurchaseOrderPage() {
 }
 
 /* ========== PO FORM MODAL ========== */
-function POFormModal({ onClose, onSaved }) {
+function POFormModal({ editPO, onClose, onSaved }) {
   const [suppliers, setSuppliers] = React.useState([]);
   const [products, setProducts] = React.useState([]);
-const [form, setForm] = React.useState({
+const [form, setForm] = React.useState(() => editPO ? {
+    supplier_id: editPO.supplier_id || '',
+    po_date: editPO.po_date ? new Date(editPO.po_date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10),
+    notes: editPO.notes || '',
+    vat_rate: editPO.vat_rate ?? 7,
+    ordered_by_staff_id: editPO.ordered_by_staff_id || '',
+    job_name: editPO.job_name || '',
+    credit_days: editPO.credit_days ?? 30,
+    wht_rate: editPO.wht_rate ?? 0,
+  } : {
     supplier_id: '', po_date: new Date().toISOString().slice(0, 10),
     notes: '', vat_rate: 7,
     ordered_by_staff_id: '', job_name: '', credit_days: 30, wht_rate: 0,
   });
-const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น', description: '' }]);
+const [items, setItems] = React.useState(() => {
+    if (editPO && Array.isArray(editPO.items) && editPO.items.length > 0) {
+      return editPO.items.map(it => ({
+        product_id: it.product_id || '',
+        quantity: it.quantity ?? 1,
+        unit_price: it.unit_price ?? 0,
+        unit: it.unit || 'ชิ้น',
+        description: it.description || '',
+        wht_rate: it.wht_rate ?? 0,
+      }));
+    }
+    return [{ product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น', description: '', wht_rate: 0 }];
+  });
   const [staffList, setStaffList] = React.useState([]);
   const [err, setErr] = React.useState('');
   React.useEffect(() => {
@@ -2408,9 +2440,26 @@ const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_pr
       .then(d => setProducts(Array.isArray(d) ? d : []));
     fetch('/api/staff?limit=500', { headers: authHeaders() }).then(r => r.json())
       .then(d => setStaffList(Array.isArray(d) ? d : (d.data || [])));
+    // ถ้า edit mode + ยังไม่มี items → โหลด PO detail เต็ม
+    if (editPO && (!editPO.items || editPO.items.length === 0)) {
+      fetch(`/api/purchase-orders/${editPO.id}`, { headers: authHeaders() })
+        .then(r => r.json())
+        .then(full => {
+          if (full && Array.isArray(full.items)) {
+            setItems(full.items.map(it => ({
+              product_id: it.product_id || '',
+              quantity: it.quantity ?? 1,
+              unit_price: it.unit_price ?? 0,
+              unit: it.unit || 'ชิ้น',
+              description: it.description || '',
+              wht_rate: it.wht_rate ?? 0,
+            })));
+          }
+        });
+    }
   }, []);
 
-  const addItem = () => setItems([...items, { product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น', description: '' }]);
+  const addItem = () => setItems([...items, { product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น', description: '', wht_rate: 0 }]);
   const removeItem = (i) => setItems(items.filter((_, idx) => idx !== i));
   const setItem = (i, field, val) => {
     const next = [...items]; next[i][field] = val;
@@ -2427,6 +2476,10 @@ const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_pr
   const subtotal = items.reduce((s, it) => s + (Number(it.quantity || 0) * Number(it.unit_price || 0)), 0);
   const vat = subtotal * (Number(form.vat_rate || 0) / 100);
   const total = subtotal + vat;
+  const whtTotal = items.reduce((s, it) => {
+    const line = Number(it.quantity || 0) * Number(it.unit_price || 0);
+    return s + (line * Number(it.wht_rate || 0) / 100);
+  }, 0);
 
   const save = async () => {
     setErr('');
@@ -2434,8 +2487,10 @@ const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_pr
     const validItems = items.filter(it => it.product_id && Number(it.quantity) > 0);
     if (validItems.length === 0) { setErr('ต้องมีรายการสินค้าอย่างน้อย 1'); return; }
 
-    const res = await fetch('/api/purchase-orders', {
-      method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    const url = editPO ? `/api/purchase-orders/${editPO.id}` : '/api/purchase-orders';
+    const method = editPO ? 'PUT' : 'POST';
+    const res = await fetch(url, {
+      method, headers: { ...authHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...form, items: validItems }),
     });
     const data = await res.json();
@@ -2447,7 +2502,7 @@ const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_pr
     <div style={styles.overlay}>
       <div style={{ ...styles.modal, width: 820 }} onClick={e => e.stopPropagation()}>
         <div style={styles.modalHeader}>
-          <div style={styles.modalTitle}>สร้างใบสั่งซื้อ</div>
+          <div style={styles.modalTitle}>{editPO ? `แก้ไขใบสั่งซื้อ: ${editPO.po_number}` : 'สร้างใบสั่งซื้อ'}</div>
           <button style={{ ...styles.btn(), padding: '4px 10px' }} onClick={onClose}>✕</button>
         </div>
         <div style={styles.modalBody}>
@@ -2505,16 +2560,7 @@ const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_pr
               <input style={styles.input} value={form.notes || ''}
                 onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
             </div>
-            <div>
-              <label style={styles.label}>หัก ณ ที่จ่าย %</label>
-              <select style={styles.input} value={form.wht_rate || 0}
-                onChange={e => setForm(f => ({ ...f, wht_rate: Number(e.target.value) }))}>
-                <option value={0}>ไม่หัก</option>
-                <option value={1}>1% (ค่าขนส่ง)</option>
-                <option value={3}>3% (บริการทั่วไป)</option>
-                <option value={5}>5% (ค่าเช่า)</option>
-              </select>
-            </div>            <div style={{ gridColumn: 'span 2' }}>
+            <div style={{ gridColumn: 'span 2' }}>
               <label style={styles.label}>VAT</label>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button type="button"
@@ -2546,9 +2592,11 @@ const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_pr
             <thead>
               <tr>
                 <th style={styles.th}>สินค้า</th>
-                <th style={{ ...styles.th, width: 90 }}>จำนวน</th>
-                <th style={{ ...styles.th, width: 130 }}>ราคา/หน่วย</th>
-                <th style={{ ...styles.th, width: 120, textAlign: 'right' }}>รวม</th>
+                <th style={{ ...styles.th, width: 80 }}>จำนวน</th>
+                <th style={{ ...styles.th, width: 110 }}>ราคา/หน่วย</th>
+                <th style={{ ...styles.th, width: 110, textAlign: 'right' }}>รวม</th>
+                <th style={{ ...styles.th, width: 90 }}>หัก %</th>
+                <th style={{ ...styles.th, width: 90, textAlign: 'right' }}>หักเงิน</th>
                 <th style={styles.th}></th>
               </tr>
             </thead>
@@ -2579,12 +2627,27 @@ const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_pr
                       {(Number(it.quantity || 0) * Number(it.unit_price || 0)).toLocaleString()}
                     </td>
                     <td style={styles.td}>
+                      <select style={styles.input} value={it.wht_rate ?? 0}
+                        onChange={e => setItem(i, 'wht_rate', Number(e.target.value))}>
+                        <option value={0}>0%</option>
+                        <option value={1}>1%</option>
+                        <option value={2}>2%</option>
+                        <option value={3}>3%</option>
+                        <option value={5}>5%</option>
+                        <option value={10}>10%</option>
+                        <option value={15}>15%</option>
+                      </select>
+                    </td>
+                    <td style={{ ...styles.td, textAlign: 'right', color: '#c41556' }}>
+                      {((Number(it.quantity || 0) * Number(it.unit_price || 0)) * Number(it.wht_rate || 0) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                    <td style={styles.td}>
                       <button style={{ ...styles.btn('danger'), padding: '4px 10px', fontSize: 12 }}
                         onClick={() => removeItem(i)}>ลบ</button>
                     </td>
                   </tr>
                   <tr>
-                    <td colSpan={5} style={{ ...styles.td, paddingTop: 0, paddingBottom: 12 }}>
+                    <td colSpan={7} style={{ ...styles.td, paddingTop: 0, paddingBottom: 12 }}>
                       <textarea
                         style={{ ...styles.input, minHeight: 50, fontSize: 13, resize: 'vertical' }}
                         value={it.description || ''}
@@ -2603,9 +2666,16 @@ const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_pr
             marginTop: 24, padding: 16, background: '#fafbfc', borderRadius: 8,
             textAlign: 'right', lineHeight: 1.8
           }}>
-            <div style={{ fontSize: 14 }}>ยอดก่อน VAT: <b>{subtotal.toLocaleString()}</b></div>
-            <div style={{ fontSize: 14 }}>VAT {form.vat_rate}%: <b>{vat.toLocaleString()}</b></div>
-            <div style={{ fontSize: 18, marginTop: 4 }}>ยอดสุทธิ: <b style={{ color: '#059669' }}>{total.toLocaleString()}</b></div>
+            <div style={{ fontSize: 14 }}>ยอดก่อน VAT: <b>{subtotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b></div>
+            <div style={{ fontSize: 14 }}>VAT {form.vat_rate}%: <b>{vat.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b></div>
+            <div style={{ fontSize: 18, marginTop: 4 }}>ยอดสุทธิ: <b style={{ color: '#059669' }}>{total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b></div>
+            {whtTotal > 0 && (
+              <>
+                <div style={{ borderTop: '1px solid #e5e7eb', margin: '8px 0' }}></div>
+                <div style={{ fontSize: 14 }}>รวมหัก ณ ที่จ่าย: <b style={{ color: '#c41556' }}>{whtTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b></div>
+                <div style={{ fontSize: 16 }}>ยอดชำระสุทธิ: <b style={{ color: '#c41556' }}>{(total - whtTotal).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b></div>
+              </>
+            )}
           </div>
         </div>
         <div style={styles.modalFooter}>
@@ -2618,7 +2688,7 @@ const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_pr
 }
 
 /* ========== PO DETAIL MODAL ========== */
-function PODetailModal({ poId, onClose, onReceive }) {
+function PODetailModal({ poId, onClose, onReceive, onEdit }) {
   const [po, setPo] = React.useState(null);
 
   const load = () => {
@@ -2688,6 +2758,14 @@ function PODetailModal({ poId, onClose, onReceive }) {
     });
     if (res.ok) load(); else alert('error');
   };
+  const unapprove = async () => {
+    if (!confirm('ยกเลิกอนุมัติ PO?\nสถานะจะเปลี่ยนกลับเป็น "ร่าง" และสามารถแก้ไขได้')) return;
+    const res = await fetch(`/api/purchase-orders/${poId}/unapprove`, {
+      method: 'POST', headers: authHeaders(),
+    });
+    if (res.ok) load();
+    else { const d = await res.json().catch(() => ({})); alert(d.error || 'error'); }
+  };
 
   return (
     <div style={styles.overlay} onClick={onClose}>
@@ -2736,6 +2814,8 @@ function PODetailModal({ poId, onClose, onReceive }) {
                 <th style={{ ...styles.th, textAlign: 'right' }}>จำนวน</th>
                 <th style={{ ...styles.th, textAlign: 'right' }}>ราคา/หน่วย</th>
                 <th style={{ ...styles.th, textAlign: 'right' }}>รวม</th>
+                <th style={{ ...styles.th, textAlign: 'right' }}>หัก %</th>
+                <th style={{ ...styles.th, textAlign: 'right' }}>หักเงิน</th>
               </tr>
             </thead>
             <tbody>
@@ -2752,6 +2832,12 @@ function PODetailModal({ poId, onClose, onReceive }) {
                   <td style={{ ...styles.td, textAlign: 'right' }}>{Number(it.quantity)}</td>
                   <td style={{ ...styles.td, textAlign: 'right' }}>{Number(it.unit_price).toLocaleString()}</td>
                   <td style={{ ...styles.td, textAlign: 'right' }}>{Number(it.total_price).toLocaleString()}</td>
+                  <td style={{ ...styles.td, textAlign: 'right', color: Number(it.wht_rate) > 0 ? '#c41556' : '#9ca3af' }}>
+                    {Number(it.wht_rate) > 0 ? `${Number(it.wht_rate)}%` : '-'}
+                  </td>
+                  <td style={{ ...styles.td, textAlign: 'right', color: Number(it.wht_amount) > 0 ? '#c41556' : '#9ca3af' }}>
+                    {Number(it.wht_amount) > 0 ? Number(it.wht_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -2766,7 +2852,7 @@ function PODetailModal({ poId, onClose, onReceive }) {
           {Number(po.wht_amount) > 0 && (
             <>
               <div style={{ borderTop: '1px solid #e5e7eb', margin: '8px 0' }}></div>
-              <div>หักภาษี ณ ที่จ่าย {po.wht_rate}%: <b>{Number(po.wht_amount).toLocaleString()}</b></div>
+              <div>รวมหัก ณ ที่จ่าย: <b>{Number(po.wht_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</b></div>
               <div style={{ fontSize: 18 }}>ยอดชำระ: <b style={{ color: '#c41556' }}>{(Number(po.grand_total) - Number(po.wht_amount)).toLocaleString()}</b></div>
             </>
           )}
@@ -2839,6 +2925,12 @@ function PODetailModal({ poId, onClose, onReceive }) {
             <button style={styles.btn('danger')} onClick={cancel}>ยกเลิก PO</button>
           )}
           <div style={{ flex: 1 }} />
+          {po.status === 'draft' && onEdit && (
+            <button style={styles.btn()} onClick={() => onEdit(po)}>แก้ไข</button>
+          )}
+          {po.status === 'approved' && (
+            <button style={styles.btn('danger')} onClick={unapprove}>ยกเลิกอนุมัติ</button>
+          )}
           {po.status === 'draft' && (
             <button style={styles.btn('primary')} onClick={approve}>อนุมัติ</button>
           )}
