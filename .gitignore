@@ -10,3 +10,5 @@ patch_*.py
 
 # Unused legacy fonts (kept in VM only)
 backend/src/fonts/THSarabunNew*.ttf
+*.bak*
+*.current

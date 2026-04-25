@@ -252,7 +252,18 @@ router.post('/:id/documents', authenticate, upload.single('file'), async (req, r
 });
 ```
 
-### PDF generation pattern (Python + reportlab)
+### PDF generation patterns
+
+**ระบบนี้มี 2 รูปแบบ ขึ้นอยู่กับเนื้อหาภาษาไทย:**
+
+| Library | ใช้ตอนไหน | เหตุผล |
+|---|---|---|
+| **WeasyPrint** | PO PDF (เอกสารภาษาไทยเยอะ) | จัด vowel/tone mark ถูกต้อง 100% (ใช้ Pango+HarfBuzz) |
+| **reportlab** | Withholding tax PDF (form ราชการ) | template form เป็นภาษาอังกฤษ + ตำแหน่งฟิกซ์ |
+
+**⚠️ ห้ามใช้ reportlab สำหรับเอกสาร text-heavy ภาษาไทย** เพราะ `canvas.drawString()` ไม่จัด GPOS → สระ/วรรณยุกต์ลอย/ซ้อน (ดู 10.12)
+
+**Backend invocation (เหมือนกันทั้ง 2 library):**
 ```javascript
 const { execSync } = require('child_process');
 const path = require('path');
@@ -273,6 +284,35 @@ router.get('/:id/pdf', authenticate, async (req, res) => {
   stream.pipe(res);
   stream.on('end', () => fs.unlink(tmpFile, () => {}));
 });
+```
+
+**WeasyPrint Python pattern (HTML→PDF):**
+```python
+from weasyprint import HTML
+from weasyprint.text.fonts import FontConfiguration
+
+html_content = f'''<!DOCTYPE html>
+<html lang="th"><head><meta charset="UTF-8">
+<style>
+  @font-face {{ font-family: 'Sarabun'; src: url('file://{FONT_REG}'); }}
+  body {{ font-family: 'Sarabun'; font-size: 9pt; }}
+</style></head>
+<body>...</body></html>'''
+
+font_config = FontConfiguration()
+HTML(string=html_content).write_pdf(out_path, font_config=font_config)
+```
+
+**Dockerfile dependencies (Debian — ห้ามใช้ Alpine):**
+```dockerfile
+FROM node:20-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip \
+    libpango-1.0-0 libpangoft2-1.0-0 libcairo2 \
+    libgdk-pixbuf-2.0-0 libharfbuzz0b libffi-dev \
+    shared-mime-info fonts-thai-tlwg \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip3 install --no-cache-dir --break-system-packages reportlab weasyprint
 ```
 
 ### ⚠️ Register route ใน `index.js`
@@ -346,8 +386,8 @@ ordered_by_staff_id (→ staff)  # ผู้สั่งซื้อ
 job_name VARCHAR(200)           # ชื่องาน
 credit_days INTEGER             # เครดิต (วัน)
 due_date DATE                   # ครบกำหนด (auto-calc po_date + credit_days)
-wht_rate NUMERIC(5,2)           # อัตราหัก ณ ที่จ่าย %
-wht_amount NUMERIC(15,2)        # ยอดหัก ณ ที่จ่าย
+wht_rate NUMERIC(5,2)           # ⚠️ DEPRECATED 2026-04-25 evening (set = 0 เสมอ; ใช้ po_items.wht_rate แทน)
+wht_amount NUMERIC(15,2)        # ยอดหัก ณ ที่จ่าย (sum จาก po_items.wht_amount)
 
 bill_number VARCHAR(50)         # เลขใบวางบิลจาก supplier
 bill_date DATE
@@ -370,6 +410,9 @@ total_price (ไม่ใช่ subtotal)
 received_qty
 unit
 unit_price
+description TEXT          # ใหม่ 2026-04-25 — รายละเอียดเพิ่มเติมรายตัว
+wht_rate NUMERIC(5,2)     # ใหม่ 2026-04-25 evening — % หัก ณ ที่จ่าย รายตัว
+wht_amount NUMERIC(15,2)  # ใหม่ 2026-04-25 evening — total_price × wht_rate / 100
 ```
 
 **`po_documents`** (ใหม่ 2026-04-24)
@@ -488,11 +531,11 @@ END AS avg_cost
 
 ### VAT / WHT
 - PO มี VAT toggle 7% / ไม่มี VAT
-- หัก ณ ที่จ่าย %: เลือก 0/1/3/5 ตอนสร้าง PO
-  - 0 = ไม่หัก
-  - 1% = ค่าขนส่ง
-  - 3% = บริการทั่วไป
-  - 5% = ค่าเช่า
+- **หัก ณ ที่จ่าย: ระดับรายการ (per-item)** ⭐ ตั้งแต่ 2026-04-25 evening
+  - แต่ละ item เลือก % ของตัวเองได้: 0/1/2/3/5/10/15
+  - `po_items.wht_amount` = `quantity × unit_price × wht_rate / 100`
+  - `purchase_orders.wht_amount` = sum ของ `po_items.wht_amount`
+  - PDF: column "หัก" แสดงแค่ % รายตัว, footer แสดง "หัก ณ ที่จ่าย" + "ยอดชำระ" รวม
 
 ### เอกสารแนบ PO
 - แนบได้ทุกสถานะ (draft/approved/received)
@@ -607,6 +650,84 @@ docker compose exec sales-db psql ... << 'EOF'      # ❌ TTY error
 - ตรวจ scope ด้วย `awk 'NR<=LINE && /^function /'`
 - ก่อนใช้ replace → เช็คว่า pattern นี้มีครั้งเดียวในไฟล์
 
+### 10.11 HTTP Method mismatch — บั๊กเงียบ (เจอใน session 04-25)
+**อาการ:** กดปุ่ม Save แล้วเงียบ — ไม่มี error ใน Console, ไม่มี popup, ฟอร์มไม่ปิด
+**Root cause:** Frontend ส่ง method หนึ่ง (เช่น PUT) แต่ Backend register อีก method (PATCH)
+- Express ตอบ 404 + HTML page (`<!DOCTYPE...`)
+- Frontend `JSON.parse()` พัง → throw `SyntaxError: Unexpected token '<'`
+- ถ้า frontend ไม่ catch error สวย ๆ → ผู้ใช้ไม่เห็นอะไรเลย
+
+**วิธี debug:**
+1. F12 → **Network tab** → กด Save → ดู status code (มักเป็น 404 สีแดง)
+2. F12 → **Console** อาจเงียบหรือมี `Unexpected token '<'`
+3. `docker compose logs sales-api --tail=20` → ดูว่า request เข้ามาด้วย method อะไร
+
+**Convention ของระบบนี้:** ทุก module ใช้ `PUT /:id` สำหรับ update
+- ❌ ยกเว้น `withholdingTax` ที่ใช้ `PATCH /:id` (frontend ส่ง PATCH ตรงกัน — ไม่ผิด)
+- ✅ `suppliers` รองรับทั้ง `PATCH` และ `PUT` (alias ชี้ handler เดียวกัน)
+
+**Pattern แก้ — ใช้ shared handler กัน duplicate code:**
+```javascript
+const updateXxx = async (req, res) => { /* logic */ };
+router.patch('/:id', authenticate, updateXxx);
+router.put('/:id', authenticate, updateXxx);
+```
+
+**ก่อน register route ใหม่ — เช็ค method ทั้งสองฝั่งให้ตรงกัน:**
+```bash
+# Backend
+grep -n "router\.\(get\|post\|put\|patch\|delete\)" backend/src/routes/xxx.js
+
+# Frontend
+grep -rn "method.*['\"]PUT\|PATCH['\"]" frontend/src/
+```
+
+### 10.12 reportlab ไม่จัด Thai vowel/tone positioning (เจอ 2026-04-25)
+**อาการ:** ใช้ `canvas.drawString()` ใน reportlab → สระอิ/อี/อึ/อือ + วรรณยุกต์ ลอยห่าง / ซ้อนกัน
+
+**Root cause:** reportlab ไม่รองรับ **OpenType GPOS** (Glyph Positioning) → ไม่ honor mark positioning ของ Thai font
+
+**สิ่งที่ลองแล้ว — ❌ ไม่ work:**
+1. ❌ ใช้ `Paragraph` แทน `drawString` — ไม่ช่วย
+2. ❌ ใหญ่ font เป็น 14-32pt — ลดอาการแต่ไม่หาย
+3. ❌ เปลี่ยน font: Sarabun → THSarabunNew → Noto Sans Thai
+4. ❌ ใช้ `fix_thai_vowels()` (PHP port from [dtinth/716814](https://gist.github.com/dtinth/716814)) — Sarabun (Google Fonts) ไม่มี PUA glyphs → สระหายเลย
+
+**✅ Solution: เปลี่ยนเป็น WeasyPrint**
+- WeasyPrint ใช้ Pango + HarfBuzz (text shaping engine) → จัด Thai ถูกต้อง 100%
+- เขียน layout เป็น HTML/CSS แทน canvas (แก้ง่ายกว่า)
+- ต้องเปลี่ยน Dockerfile base: `node:20-alpine` → `node:20-slim` (Alpine ลง weasyprint dependencies ยุ่ง)
+- ต้องเพิ่ม system deps: pango/cairo/gdk-pixbuf/harfbuzz/fonts-thai-tlwg
+- Build image นานขึ้น ~2x (ลง dependencies เยอะ) — ยอมแลกได้
+
+**สำหรับ withholding tax PDF (form ราชการ) ยังใช้ reportlab ได้** เพราะ form template ไม่มี text Thai เยอะ ตำแหน่งฟิกซ์อยู่แล้ว
+
+---
+
+### 10.13 Python patch script — indentation ในไฟล์จริงต้องตรงเป๊ะ (เจอ 2026-04-25)
+**อาการ:** patch script รันแล้วบอก `✗ NOT FOUND` ทุก pattern แต่ duplicate-check ก็ผ่าน
+
+**Root cause:** ไฟล์จริงใน VM **indentation ไม่เหมือน convention** ที่คาดเดา เช่น:
+- React.useState `const [items, setItems] = ...` ใน App.jsx **ไม่มี leading spaces** (ที่ผมเขียน script คาดว่ามี 2 spaces)
+- Patch script `replacements` array ใช้ string match แบบ exact → space ผิด 1 ตัวก็ไม่ match
+
+**วิธี debug:**
+```bash
+# ดูบรรทัดจริงพร้อมเลขบรรทัด
+grep -n "useState.*product_id" frontend/src/App.jsx
+
+# ใช้ -- หน้าบรรทัดที่ขึ้นต้นด้วย dash เผื่อ shell mistake parse
+sed -n '2400,2415p' frontend/src/App.jsx | cat -A   # cat -A แสดง $ จบบรรทัด, ^I เป็น tab
+```
+
+**Pattern แก้:**
+1. **อ่านไฟล์จริงก่อนเขียน patch** — ใช้ `sed -n 'START,ENDp'` ดู context รอบๆ
+2. **เขียน OLD block ให้ตรง byte-for-byte** รวม leading whitespace
+3. **ทดสอบ patch ด้วย dry run** — ใส่ assertion ว่า count > 0 ก่อน save file
+4. **ถ้าหา pattern ไม่เจอ — print first 100 chars ของ pattern ออกมา** เพื่อเทียบกับไฟล์จริง
+
+**Best practice:** ทุก patch script ของระบบนี้ต้อง print "✓" หรือ "✗ NOT FOUND" ของแต่ละ replacement แล้ว exit non-zero ถ้าไม่ครบ
+
 ---
 
 ## 📝 11. Workflow การทำงาน (สไตล์ที่พี่ชอบ)
@@ -680,7 +801,7 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 - ✅ แสดง "ราคาต้นทุน" (ไม่ใช่ราคาขาย) ในหน้าคลังสินค้า
 
 ### Phase 2.1 — PO Billing/Payment/PDF (2026-04-24)
-- ✅ ฟิลด์ใหม่ตอนสร้าง PO: **ผู้สั่งซื้อ** (staff active), **ชื่องาน**, **เครดิต (วัน)**, **หัก ณ ที่จ่าย %**
+- ✅ ฟิลด์ใหม่ตอนสร้าง PO: **ผู้สั่งซื้อ** (staff active), **ชื่องาน**, **เครดิต (วัน)**, ~~หัก ณ ที่จ่าย %~~ (ย้ายไป per-item ใน Phase 2.5)
 - ✅ Auto-calc **ครบกำหนด** จาก po_date + credit_days
 - ✅ แสดงใน PO Detail: เครดิต/ครบกำหนด/ผู้สั่งซื้อ/ชื่องาน/หัก ณ ที่จ่าย/ยอดชำระ
 - ✅ **ปุ่มพิมพ์ PDF** (layout IDEA HOUSE — Sarabun + pink header)
@@ -693,6 +814,54 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 - ✅ ตาราง `po_documents` + CASCADE delete
 - ✅ auth middleware รองรับ **token จาก ?t= query string** (สำหรับ `<a href>` และ PDF print)
 
+### Phase 2.3 — PDF Quality + Per-Item Description (2026-04-25)
+- ✅ **เปลี่ยน PO PDF เป็น WeasyPrint** — แก้ปัญหาสระไทยลอย/ซ้อน (reportlab ไม่จัด GPOS)
+- ✅ **Dockerfile: Alpine → Debian (node:20-slim)** + Pango/Cairo/HarfBuzz deps
+- ✅ **Layout PDF compact professional**: title 20pt, body 9pt, address 8.5pt
+- ✅ **Single left signature block** เฉพาะ "ในนาม บริษัทเรา" (ตัด supplier signature ออก)
+- ✅ **Logo support** ผ่าน `backend/src/assets/logo.png`
+- ✅ **Per-item description** — เพิ่ม column `po_items.description TEXT` + textarea ใต้แต่ละ item row
+- ✅ PDF แสดง description ใต้ชื่อสินค้า (แทนการใส่ job_name ซ้ำในทุก item)
+
+### Phase 2.4 — PO Edit + Unapprove (2026-04-25 evening)
+- ✅ **แก้ไข PO** (เฉพาะ status=`draft`) — แก้ได้หมดทุกอย่าง: header + items + supplier + VAT + WHT
+- ✅ **ยกเลิกอนุมัติ** (status `approved` → `draft`) — กลับมาแก้ไขได้
+  - PO ที่ `received` แล้ว ห้ามยกเลิก (มี serial ผูก stock)
+- ✅ Backend endpoints ใหม่:
+  - `PUT /:id` — update PO header + items (transaction: DELETE + INSERT items ใหม่)
+  - `POST /:id/unapprove` — clear `approved_by`/`approved_at`, status → draft
+- ✅ Frontend:
+  - ปุ่ม **"แก้ไข"** ในตาราง list PO (เฉพาะ draft)
+  - ปุ่ม **"แก้ไข"** ใน PO Detail modal footer (เฉพาะ draft)
+  - ปุ่ม **"ยกเลิกอนุมัติ"** สีแดง ใน PO Detail modal footer (เฉพาะ approved)
+  - ใช้ `POFormModal` ตัวเดิม รับ prop `editPO` → prefill ข้อมูล + เปลี่ยน method PUT/POST อัตโนมัติ
+  - Auto-load PO detail (รวม items) เมื่อเปิดแก้ไขจาก list
+
+### Phase 2.5 — Per-Item WHT (2026-04-25 evening)
+- ✅ **หัก ณ ที่จ่ายระดับรายการ** — แต่ละ item เลือก % ได้เอง (เลิกใช้ระดับ PO header)
+- ✅ Database:
+  - เพิ่ม column `po_items.wht_rate NUMERIC(5,2)` + `po_items.wht_amount NUMERIC(15,2)`
+  - Migration script: `migration_po_item_wht.sql` (backfill: PO ที่เคยมี wht_rate header → กระจายลงทุก item)
+  - `purchase_orders.wht_rate` deprecated (เก็บ column ไว้แต่ set = 0 เสมอ); `purchase_orders.wht_amount` = sum ของ items
+- ✅ Backend (`POST /` + `PUT /:id`):
+  - คำนวณ `wht_amount` ต่อ item = `quantity × unit_price × wht_rate / 100`
+  - Sum รวมเป็น `wht_amount` ของ PO header
+- ✅ Frontend:
+  - **POFormModal**: ลบ field "หัก ณ ที่จ่าย %" จาก header → เพิ่ม column **"หัก %"** (dropdown 0/1/2/3/5/10/15) + **"หักเงิน"** ในตาราง items
+  - กล่องสรุปท้าย form: "รวมหัก ณ ที่จ่าย" + "ยอดชำระสุทธิ" (แสดงเฉพาะเมื่อมี WHT)
+  - **PODetailModal**: เพิ่ม column "หัก %" + "หักเงิน" ในตาราง items (ตัวเลขสีชมพู `#c41556`)
+  - Footer summary: "รวมหัก ณ ที่จ่าย" (ไม่แสดง %)
+- ✅ PDF (`generate_po_pdf.py`):
+  - เพิ่ม column **"หัก"** ขวาสุดในตาราง items (แสดงเฉพาะ %, ตัวสีชมพู)
+  - ตัด row "หัก ณ ที่จ่าย" จาก meta panel ขวาบน (ซ้ำซ้อน)
+  - Footer label: "หักภาษี ณ ที่จ่าย {wht_rate}%" → **"หัก ณ ที่จ่าย"** (ไม่ใส่ %)
+  - ปรับ column widths: qty 16→15mm, price 28→25mm, total 26→24mm, wht 11mm
+
+### Backup & Tooling (2026-04-25)
+- ✅ **`backup.sh`** — full backup script (DB dump + source tar + junk cleanup + .gitignore update)
+- ✅ Backup files อยู่ที่ `~/sales-system-backups/`
+- ✅ `.gitignore` exclude `*.bak`, `backup_*.sql`, `patch_*.py`, legacy fonts
+
 ### UX Improvements
 - ✅ Form modal ไม่ปิดเมื่อคลิก overlay (ป้องกันเผลอคลิกแล้วเสียข้อมูล)
 - ✅ Decimal formatting 2 ตำแหน่งในการแสดงราคา
@@ -700,6 +869,9 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 ### Bug Fixes
 - ✅ NaN bug ใน stock_qty (null + NaN guard ทุก UPDATE query)
 - ✅ Stock qty ซิงค์กับจำนวน serial จริง
+- ✅ **Supplier edit "กด Save แล้วเงียบ"** (2026-04-25) — Backend register `PATCH /:id` แต่ frontend ส่ง `PUT` → 404 + HTML response → JSON parse พังเงียบ ๆ → แก้โดยเพิ่ม `router.put('/:id')` เป็น alias ของ `router.patch('/:id')` ใช้ shared handler `updateSupplier` (ดู 10.11)
+- ✅ **PO PDF สระไทยลอย/ซ้อน** (2026-04-25) — เปลี่ยนจาก reportlab เป็น WeasyPrint (ดู 10.12) + เปลี่ยน Docker base เป็น Debian
+- ✅ **PO PDF: job_name ซ้ำในทุก item** (2026-04-25) — เพิ่ม column `po_items.description` + ใช้ description รายตัวแทน
 
 ### Pending (รอทำต่อ)
 - ⏳ **Tab การวางบิล** ใน PO Detail (backend endpoint มีแล้ว)
@@ -718,6 +890,12 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 
 ---
 
-**Last Updated:** 2026-04-24
-**Latest Commit:** `014aa8f` — Phase 2: PO document attachments + query-string auth
-**Previous:** `02318f4` — Phase 2: PO billing/payment/credit/WHT + print PDF
+**Last Updated:** 2026-04-25 (late evening session — PO edit/unapprove + per-item WHT)
+**Latest Commits:**
+- `aff5595` — chore: add backup script and .gitignore rules
+- `86def56` — feat(po): add per-item description field
+- `55ff3ce` — feat(po): switch PO PDF to WeasyPrint with proper Thai vowel rendering
+- `744f3df` — fix(suppliers): add PUT /:id as alias for PATCH /:id
+- `3d747fd` — docs: add project context + new chat template
+- `014aa8f` — Phase 2: PO document attachments + query-string auth
+- `02318f4` — Phase 2: PO billing/payment/credit/WHT + print PDF
