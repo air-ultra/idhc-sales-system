@@ -2398,7 +2398,7 @@ const [form, setForm] = React.useState({
     notes: '', vat_rate: 7,
     ordered_by_staff_id: '', job_name: '', credit_days: 30, wht_rate: 0,
   });
-const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น' }]);
+const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น', description: '' }]);
   const [staffList, setStaffList] = React.useState([]);
   const [err, setErr] = React.useState('');
   React.useEffect(() => {
@@ -2410,7 +2410,7 @@ const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_pr
       .then(d => setStaffList(Array.isArray(d) ? d : (d.data || [])));
   }, []);
 
-  const addItem = () => setItems([...items, { product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น' }]);
+  const addItem = () => setItems([...items, { product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น', description: '' }]);
   const removeItem = (i) => setItems(items.filter((_, idx) => idx !== i));
   const setItem = (i, field, val) => {
     const next = [...items]; next[i][field] = val;
@@ -2554,34 +2554,46 @@ const [items, setItems] = React.useState([{ product_id: '', quantity: 1, unit_pr
             </thead>
             <tbody>
               {items.map((it, i) => (
-                <tr key={i}>
-                  <td style={styles.td}>
-                    <select style={styles.input} value={it.product_id}
-                      onChange={e => setItem(i, 'product_id', e.target.value)}>
-                      <option value="">-- เลือก --</option>
-                      {products.map(p => (
-                        <option key={p.id} value={p.id}>
-                          {p.product_code} {p.model ? `· ${p.model}` : ''} · {p.name}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td style={styles.td}>
-                    <input type="number" style={styles.input} value={it.quantity}
-                      onChange={e => setItem(i, 'quantity', e.target.value)} />
-                  </td>
-                  <td style={styles.td}>
-                    <input type="number" style={styles.input} value={it.unit_price}
-                      onChange={e => setItem(i, 'unit_price', e.target.value)} />
-                  </td>
-                  <td style={{ ...styles.td, textAlign: 'right' }}>
-                    {(Number(it.quantity || 0) * Number(it.unit_price || 0)).toLocaleString()}
-                  </td>
-                  <td style={styles.td}>
-                    <button style={{ ...styles.btn('danger'), padding: '4px 10px', fontSize: 12 }}
-                      onClick={() => removeItem(i)}>ลบ</button>
-                  </td>
-                </tr>
+                <React.Fragment key={i}>
+                  <tr>
+                    <td style={styles.td}>
+                      <select style={styles.input} value={it.product_id}
+                        onChange={e => setItem(i, 'product_id', e.target.value)}>
+                        <option value="">-- เลือก --</option>
+                        {products.map(p => (
+                          <option key={p.id} value={p.id}>
+                            {p.product_code} {p.model ? `· ${p.model}` : ''} · {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td style={styles.td}>
+                      <input type="number" style={styles.input} value={it.quantity}
+                        onChange={e => setItem(i, 'quantity', e.target.value)} />
+                    </td>
+                    <td style={styles.td}>
+                      <input type="number" style={styles.input} value={it.unit_price}
+                        onChange={e => setItem(i, 'unit_price', e.target.value)} />
+                    </td>
+                    <td style={{ ...styles.td, textAlign: 'right' }}>
+                      {(Number(it.quantity || 0) * Number(it.unit_price || 0)).toLocaleString()}
+                    </td>
+                    <td style={styles.td}>
+                      <button style={{ ...styles.btn('danger'), padding: '4px 10px', fontSize: 12 }}
+                        onClick={() => removeItem(i)}>ลบ</button>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={5} style={{ ...styles.td, paddingTop: 0, paddingBottom: 12 }}>
+                      <textarea
+                        style={{ ...styles.input, minHeight: 50, fontSize: 13, resize: 'vertical' }}
+                        value={it.description || ''}
+                        onChange={e => setItem(i, 'description', e.target.value)}
+                        placeholder="↳ รายละเอียดเพิ่มเติม (ถ้ามี) เช่น สเปค ขนาด สถานที่ติดตั้ง"
+                      />
+                    </td>
+                  </tr>
+                </React.Fragment>
               ))}
             </tbody>
           </table>

@@ -189,11 +189,12 @@ router.post('/', authenticate, async (req, res) => {
 
     for (const it of items) {
       await client.query(
-        `INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+        `INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price, description)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [po.id, it.product_id, it.unit || 'ชิ้น',
          it.quantity, it.unit_price,
-         Number(it.quantity) * Number(it.unit_price)]
+         Number(it.quantity) * Number(it.unit_price),
+         it.description || null]
       );
     }
 
@@ -741,7 +742,7 @@ router.get('/:id/pdf', authenticate, async (req, res) => {
       items: itemsRes.rows.map((it, idx) => ({
         no: idx + 1,
         description: it.product_name + (it.product_model ? `\n${it.product_model}` : '') +
-                     (po.job_name ? `\n${po.job_name}` : ''),
+                     (it.description ? `\n${it.description}` : ''),
         quantity: Number(it.quantity),
         unit_price: Number(it.unit_price),
         total: Number(it.total_price),
