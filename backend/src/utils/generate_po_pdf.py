@@ -1,241 +1,431 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Generate Purchase Order PDF matching IDEA HOUSE template.
+Generate Purchase Order PDF — IDEA HOUSE template (compact professional layout)
 Reads JSON from stdin, writes PDF to argv[1].
+Uses WeasyPrint (Pango+HarfBuzz) for proper Thai text shaping.
 """
 import sys
 import json
 import os
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-
-# ─── Fonts ───
-FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'fonts')
-pdfmetrics.registerFont(TTFont('Sarabun', os.path.join(FONT_DIR, 'Sarabun-Regular.ttf')))
-pdfmetrics.registerFont(TTFont('Sarabun-Bold', os.path.join(FONT_DIR, 'Sarabun-Bold.ttf')))
-
-# ─── Colors (hex → rgb 0-1) ───
-PINK = (0.78, 0.08, 0.34)  # ~#c41556
-GRAY = (0.45, 0.45, 0.45)
-LIGHT_GRAY = (0.9, 0.9, 0.9)
-BLACK = (0, 0, 0)
-
-# ─── Read data ───
-data = json.loads(sys.stdin.read())
-out_path = sys.argv[1]
-
-# ─── Setup canvas ───
-c = canvas.Canvas(out_path, pagesize=A4)
-W, H = A4
-MARGIN = 15 * mm
+import html as html_lib
+from weasyprint import HTML
+from weasyprint.text.fonts import FontConfiguration
 
 
-def set_font(size=10, bold=False):
-    c.setFont('Sarabun-Bold' if bold else 'Sarabun', size)
+# ─── Paths ───
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FONT_DIR = os.path.join(BASE_DIR, '..', 'fonts')
+ASSETS_DIR = os.path.join(BASE_DIR, '..', 'assets')
 
-
-def set_color(rgb):
-    c.setFillColorRGB(*rgb)
-
-
-def draw_text(x, y, text, size=10, bold=False, color=BLACK):
-    set_font(size, bold)
-    set_color(color)
-    c.drawString(x, y, str(text))
-
-
-def draw_right(x, y, text, size=10, bold=False, color=BLACK):
-    set_font(size, bold)
-    set_color(color)
-    c.drawRightString(x, y, str(text))
-
-
-def draw_center(x, y, text, size=10, bold=False, color=BLACK):
-    set_font(size, bold)
-    set_color(color)
-    c.drawCentredString(x, y, str(text))
+FONT_REG = os.path.join(FONT_DIR, 'Sarabun-Regular.ttf')
+FONT_BOLD = os.path.join(FONT_DIR, 'Sarabun-Bold.ttf')
+LOGO_PATH = os.path.join(ASSETS_DIR, 'logo.png')
 
 
 def fmt_money(n):
-    """Format number like 2,100.00"""
     try:
         return f"{float(n):,.2f}"
     except Exception:
         return "0.00"
 
 
-# ═══════════════════════════════════════════════
-# TOP SECTION
-# ═══════════════════════════════════════════════
-y = H - MARGIN
+def fmt_qty(n):
+    try:
+        v = float(n)
+        if v == int(v):
+            return f"{int(v):,}"
+        return f"{v:,.2f}"
+    except Exception:
+        return "0"
 
-# Logo placeholder — ใช้ text logo ถ้าไม่มีรูป
-logo_path = os.path.join(FONT_DIR, '..', 'assets', 'logo.png')
-if os.path.exists(logo_path):
-    c.drawImage(logo_path, MARGIN, y - 18*mm, width=35*mm, height=18*mm,
-                preserveAspectRatio=True, mask='auto')
-else:
-    # text fallback
-    draw_text(MARGIN, y - 6*mm, 'IDEA HOUSE', 16, True, PINK)
-    draw_text(MARGIN, y - 10*mm, 'C E N T E R', 8, False, GRAY)
 
-# Title "ใบสั่งซื้อ" (top right)
-draw_right(W - MARGIN, y - 4*mm, 'ใบสั่งซื้อ', 24, True, PINK)
+def safe(value, default=''):
+    if value is None or str(value).strip() == '':
+        return default
+    return str(value)
 
-# ─── Payer info (left, below logo) ───
-y_info = y - 22*mm
-draw_text(MARGIN, y_info, data.get('payer_name', ''), 10, True)
-y_info -= 4*mm
-for line in data.get('payer_address', '').split('\n'):
-    draw_text(MARGIN, y_info, line, 9)
-    y_info -= 3.5*mm
-draw_text(MARGIN, y_info, f"เลขประจำตัวผู้เสียภาษี {data.get('payer_tax_id', '')}", 9)
-y_info -= 3.5*mm
-draw_text(MARGIN, y_info, f"โทร. {data.get('payer_phone', '')}", 9)
-y_info -= 3.5*mm
-draw_text(MARGIN, y_info, f"เบอร์มือถือ {data.get('payer_mobile', '')}", 9)
-y_info -= 3.5*mm
-draw_text(MARGIN, y_info, f"โทรสาร {data.get('payer_fax', '')}", 9)
-y_info -= 3.5*mm
-draw_text(MARGIN, y_info, data.get('payer_website', ''), 9)
 
-# ─── PO meta (right) ───
-meta_x_label = W - 85*mm
-meta_x_val = W - 55*mm
-y_meta = y - 24*mm
+def esc(text):
+    if text is None:
+        return ''
+    return html_lib.escape(str(text)).replace('\n', '<br>')
 
-def meta_row(label, value):
-    global y_meta
-    draw_text(meta_x_label, y_meta, label, 9.5, False, GRAY)
-    draw_text(meta_x_val, y_meta, str(value), 9.5, False)
-    y_meta -= 5*mm
 
-meta_row('เลขที่', data.get('po_number', ''))
-meta_row('วันที่', data.get('po_date', ''))
-meta_row('เครดิต', f"{data.get('credit_days', 0)} วัน")
-meta_row('ครบกำหนด', data.get('due_date', ''))
-meta_row('ผู้สั่งซื้อ', data.get('ordered_by', ''))
+# ─── Read data ───
+data = json.loads(sys.stdin.read())
+out_path = sys.argv[1]
 
-# Job name
-if data.get('job_name'):
-    y_meta -= 2*mm
-    draw_text(meta_x_label, y_meta, 'ชื่องาน', 9.5, False, GRAY)
-    draw_text(meta_x_val, y_meta, data.get('job_name', ''), 9.5, False)
-
-# ═══════════════════════════════════════════════
-# SUPPLIER SECTION
-# ═══════════════════════════════════════════════
-y_sup = y_info - 8*mm
-draw_text(MARGIN, y_sup, 'ผู้จำหน่าย', 10, True, PINK)
-y_sup -= 4.5*mm
-draw_text(MARGIN, y_sup, data.get('supplier_name', ''), 10, True)
-y_sup -= 4*mm
-for line in (data.get('supplier_address') or '').split('\n'):
-    if line.strip():
-        draw_text(MARGIN, y_sup, line, 9)
-        y_sup -= 3.5*mm
-if data.get('supplier_tax_id'):
-    draw_text(MARGIN, y_sup, f"เลขประจำตัวผู้เสียภาษี {data.get('supplier_tax_id', '')}", 9)
-    y_sup -= 3.5*mm
-
-# ═══════════════════════════════════════════════
-# ITEMS TABLE
-# ═══════════════════════════════════════════════
-y_table = y_sup - 8*mm
-
-# Column definitions
-col_no = MARGIN
-col_desc = MARGIN + 12*mm
-col_qty = W - 85*mm
-col_price = W - 60*mm
-col_total = W - 30*mm
-
-# Header (pink bar)
-c.setFillColorRGB(*PINK)
-c.rect(MARGIN, y_table - 6*mm, W - 2*MARGIN, 7*mm, stroke=0, fill=1)
-
-set_color((1, 1, 1))
-set_font(9.5, True)
-c.drawString(col_no, y_table - 4*mm, '#')
-c.drawCentredString((col_desc + col_qty) / 2, y_table - 4*mm, 'รายละเอียด')
-c.drawRightString(col_qty + 15*mm, y_table - 4*mm, 'จำนวน')
-c.drawRightString(col_price + 15*mm, y_table - 4*mm, 'ราคาต่อหน่วย')
-c.drawRightString(col_total + 15*mm, y_table - 4*mm, 'ยอดรวม')
-
-# Rows
-y_row = y_table - 10*mm
-set_color(BLACK)
-set_font(10, False)
+# ─── Build items rows ───
+items_html = ''
 for item in data.get('items', []):
-    lines = str(item.get('description', '')).split('\n')
-    row_height = max(5*mm, len(lines) * 4.5*mm)
+    desc = esc(item.get('description', ''))
+    items_html += f'''
+    <tr>
+      <td class="col-no">{esc(item.get('no', ''))}</td>
+      <td class="col-desc">{desc}</td>
+      <td class="col-qty">{fmt_qty(item.get('quantity', 0))}</td>
+      <td class="col-price">{fmt_money(item.get('unit_price', 0))}</td>
+      <td class="col-total">{fmt_money(item.get('total', 0))}</td>
+    </tr>
+    '''
 
-    draw_text(col_no, y_row, item.get('no', ''), 10)
-    for i, line in enumerate(lines):
-        draw_text(col_desc, y_row - i * 4*mm, line, 10)
-    draw_right(col_qty + 15*mm, y_row, fmt_money(item.get('quantity', 0)).replace('.00', ''), 10)
-    draw_right(col_price + 15*mm, y_row, fmt_money(item.get('unit_price', 0)), 10)
-    draw_right(col_total + 15*mm, y_row, fmt_money(item.get('total', 0)), 10)
+# ─── Build meta rows (PO info on the right) ───
+meta_rows = [
+    ('เลขที่', data.get('po_number')),
+    ('วันที่', data.get('po_date')),
+    ('เครดิต', f"{data.get('credit_days', 0)} วัน"),
+    ('ครบกำหนด', data.get('due_date')),
+    ('ผู้สั่งซื้อ', data.get('ordered_by')),
+]
+if data.get('job_name'):
+    meta_rows.append(('ชื่องาน', data.get('job_name')))
+if data.get('wht_rate') and float(data.get('wht_rate', 0)) > 0:
+    meta_rows.append(('หัก ณ ที่จ่าย', f"{data.get('wht_rate')}%"))
 
-    y_row -= row_height + 2*mm
+meta_html = ''
+for label, value in meta_rows:
+    val = safe(value, '-')
+    meta_html += f'''
+    <div class="meta-row">
+      <div class="meta-label">{esc(label)}</div>
+      <div class="meta-value">{esc(val)}</div>
+    </div>
+    '''
 
-# Divider line
-c.setStrokeColorRGB(*LIGHT_GRAY)
-c.setLineWidth(0.5)
-c.line(MARGIN, y_row, W - MARGIN, y_row)
-
-# ═══════════════════════════════════════════════
-# TOTALS (right aligned)
-# ═══════════════════════════════════════════════
-y_total = y_row - 8*mm
-
-def total_row(label, value, bold=False, color=BLACK, size=10):
-    global y_total
-    draw_right(W - 40*mm, y_total, label, size, False, GRAY)
-    draw_right(W - 15*mm, y_total, fmt_money(value), size, bold, color)
-    draw_text(W - 13*mm, y_total, 'บาท', size, False, GRAY)
-    y_total -= 5*mm
-
-# words (left side)
-draw_text(MARGIN, y_total, f"({data.get('grand_total_words', '')})", 10)
-
-total_row('รวมเป็นเงิน', data.get('total_amount', 0))
-total_row(f"ภาษีมูลค่าเพิ่ม {data.get('vat_rate', 0)}%", data.get('vat_amount', 0))
-total_row('จำนวนเงินรวมทั้งสิ้น', data.get('grand_total', 0), bold=True)
-
+# ─── Build totals (WHT optional) ───
+wht_html = ''
 if data.get('show_wht'):
-    y_total -= 3*mm
-    # line
-    c.setStrokeColorRGB(*LIGHT_GRAY)
-    c.line(W - 80*mm, y_total + 2*mm, W - 10*mm, y_total + 2*mm)
-    total_row(f"หักภาษี ณ ที่จ่าย {data.get('wht_rate', 0)}%", data.get('wht_amount', 0))
-    total_row('ยอดชำระ', data.get('net_payment', 0), bold=True, color=PINK)
+    wht_html = f'''
+    <hr class="total-divider">
+    <div class="total-row">
+      <div class="total-label">หักภาษี ณ ที่จ่าย {data.get('wht_rate', 0)}%</div>
+      <div class="total-value">{fmt_money(data.get('wht_amount', 0))}</div>
+      <div class="total-unit">บาท</div>
+    </div>
+    <div class="total-row">
+      <div class="total-label">ยอดชำระ</div>
+      <div class="total-value pink bold">{fmt_money(data.get('net_payment', 0))}</div>
+      <div class="total-unit">บาท</div>
+    </div>
+    '''
 
-# ═══════════════════════════════════════════════
-# SIGNATURES
-# ═══════════════════════════════════════════════
-y_sig = 45*mm
+# ─── Logo block ───
+if os.path.exists(LOGO_PATH):
+    logo_html = f'<img src="file://{LOGO_PATH}" class="logo">'
+else:
+    logo_html = '<div class="logo-text"><div class="logo-main">IDEA HOUSE</div><div class="logo-sub">C E N T E R</div></div>'
 
-# Labels
-draw_text(MARGIN, y_sig, f"ในนาม {data.get('supplier_name', '')}", 10)
-draw_right(W - MARGIN, y_sig, f"ในนาม {data.get('payer_name', '')}", 10)
+# ─── Compose HTML ───
+html_content = f'''<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<style>
+@font-face {{
+  font-family: 'Sarabun';
+  src: url('file://{FONT_REG}');
+  font-weight: normal;
+}}
+@font-face {{
+  font-family: 'Sarabun';
+  src: url('file://{FONT_BOLD}');
+  font-weight: bold;
+}}
 
-# Lines for signature
-y_sig_line = 25*mm
-c.setStrokeColorRGB(*LIGHT_GRAY)
-c.line(MARGIN, y_sig_line, MARGIN + 50*mm, y_sig_line)
-c.line(MARGIN + 55*mm, y_sig_line, MARGIN + 85*mm, y_sig_line)
-c.line(W - MARGIN - 85*mm, y_sig_line, W - MARGIN - 55*mm, y_sig_line)
-c.line(W - MARGIN - 50*mm, y_sig_line, W - MARGIN, y_sig_line)
+@page {{
+  size: A4;
+  margin: 12mm 14mm;
+}}
 
-draw_center(MARGIN + 25*mm, y_sig_line - 5*mm, 'ผู้ขาย', 9, False, GRAY)
-draw_center(MARGIN + 70*mm, y_sig_line - 5*mm, 'วันที่', 9, False, GRAY)
-draw_center(W - MARGIN - 70*mm, y_sig_line - 5*mm, 'ผู้อนุมัติ', 9, False, GRAY)
-draw_center(W - MARGIN - 25*mm, y_sig_line - 5*mm, 'วันที่', 9, False, GRAY)
+* {{
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}}
 
-c.showPage()
-c.save()
+body {{
+  font-family: 'Sarabun', sans-serif;
+  font-size: 9pt;
+  color: #000;
+  line-height: 1.35;
+}}
+
+.pink {{ color: #c41556; }}
+.bold {{ font-weight: bold; }}
+.gray {{ color: #737373; }}
+
+/* ─── HEADER ─── */
+.header {{
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 2mm;
+}}
+.logo {{ width: 38mm; height: auto; }}
+.logo-text .logo-main {{
+  font-size: 14pt; font-weight: bold; color: #c41556;
+}}
+.logo-text .logo-sub {{
+  font-size: 8pt; color: #737373; letter-spacing: 2px;
+}}
+.title {{
+  font-size: 20pt; font-weight: bold; color: #c41556;
+  text-align: right;
+  line-height: 1;
+}}
+
+/* ─── INFO ROW (payer left, meta right) ─── */
+.info-row {{
+  display: flex;
+  justify-content: space-between;
+  margin-top: 1mm;
+}}
+.payer {{
+  width: 110mm;
+  padding-right: 4mm;
+  font-size: 9pt;
+  line-height: 1.4;
+}}
+.payer-name {{ font-weight: bold; font-size: 9.5pt; margin-bottom: 0.5mm; }}
+
+.meta {{
+  width: 70mm;
+  font-size: 9pt;
+  border-top: 0.5pt solid #d9d9d9;
+  padding-top: 1mm;
+}}
+.meta-row {{
+  display: flex;
+  margin-bottom: 1mm;
+}}
+.meta-label {{
+  width: 26mm;
+  color: #737373;
+}}
+.meta-value {{
+  flex: 1;
+}}
+
+/* ─── SUPPLIER ─── */
+.supplier {{
+  margin-top: 3mm;
+  font-size: 9pt;
+  line-height: 1.4;
+}}
+.supplier-header {{
+  font-weight: bold;
+  color: #c41556;
+  font-size: 9.5pt;
+  margin-bottom: 0.5mm;
+}}
+.supplier-name {{ font-weight: bold; font-size: 9.5pt; }}
+
+/* ─── ITEMS TABLE ─── */
+.items {{
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 5mm;
+  font-size: 9pt;
+}}
+.items thead tr {{
+  background: #c41556;
+  color: white;
+}}
+.items th {{
+  padding: 1.5mm 2mm;
+  text-align: left;
+  font-weight: bold;
+  font-size: 9pt;
+}}
+.items td {{
+  padding: 1.5mm 2mm;
+  vertical-align: top;
+}}
+.items .col-no {{ width: 8mm; text-align: center; }}
+.items .col-desc {{ }}
+.items .col-qty {{ width: 16mm; text-align: right; }}
+.items .col-price {{ width: 28mm; text-align: right; white-space: nowrap; }}
+.items .col-total {{ width: 26mm; text-align: right; }}
+.items th.col-qty, .items th.col-price, .items th.col-total {{
+  text-align: right;
+}}
+.items th.col-no {{ text-align: center; }}
+.items tbody tr {{ border-bottom: 0.3pt solid #e5e5e5; }}
+
+/* ─── TOTALS ─── */
+.totals-section {{
+  display: flex;
+  justify-content: space-between;
+  margin-top: 3mm;
+  font-size: 9pt;
+}}
+.words {{
+  flex: 1;
+  font-weight: bold;
+  padding-top: 1mm;
+  padding-right: 5mm;
+}}
+.totals {{
+  width: 75mm;
+}}
+.total-row {{
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.6mm 0;
+}}
+.total-label {{
+  flex: 1;
+  text-align: right;
+  color: #737373;
+  padding-right: 4mm;
+}}
+.total-value {{
+  width: 24mm;
+  text-align: right;
+}}
+.total-unit {{
+  width: 9mm;
+  text-align: left;
+  color: #737373;
+  padding-left: 1mm;
+}}
+.total-divider {{
+  border: none;
+  border-top: 0.5pt solid #d9d9d9;
+  margin: 1.5mm 0 1mm 0;
+}}
+
+/* ─── SIGNATURES (เหมือนตัวอย่างที่พี่ส่งมา — แต่ละฝั่งมี 2 ช่อง) ─── */
+.signatures {{
+  position: fixed;
+  bottom: 12mm;
+  left: 14mm;
+  right: 14mm;
+}}
+.sig-names {{
+  display: flex;
+  justify-content: flex-start;
+  font-weight: bold;
+  font-size: 9pt;
+  margin-bottom: 14mm;
+}}
+.sig-names .right {{ width: 88mm; text-align: left; }}
+.sig-lines {{
+  display: flex;
+  justify-content: flex-start;
+}}
+.sig-block {{
+  display: flex;
+  width: 88mm;
+  justify-content: space-between;
+}}
+.sig-line {{
+  width: 40mm;
+  text-align: center;
+  font-size: 8.5pt;
+  color: #737373;
+  padding-top: 8mm;
+  position: relative;
+}}
+.sig-line::before {{
+  content: "";
+  position: absolute;
+  top: 6mm;
+  left: 4mm;
+  right: 4mm;
+  border-top: 0.5pt solid #b3b3b3;
+}}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div>{logo_html}</div>
+  <div class="title">ใบสั่งซื้อ</div>
+</div>
+
+<!-- INFO (payer + meta) -->
+<div class="info-row">
+  <div class="payer">
+    <div class="payer-name">{esc(data.get('payer_name', ''))}</div>
+    <div>{esc(data.get('payer_address', ''))}</div>
+    <div>เลขประจำตัวผู้เสียภาษี {esc(data.get('payer_tax_id', ''))}</div>
+    <div>โทร. {esc(data.get('payer_phone', ''))}</div>
+    <div>เบอร์มือถือ {esc(data.get('payer_mobile', ''))}</div>
+    <div>โทรสาร {esc(data.get('payer_fax', ''))}</div>
+    <div>{esc(data.get('payer_website', ''))}</div>
+  </div>
+  <div class="meta">
+    {meta_html}
+  </div>
+</div>
+
+<!-- SUPPLIER -->
+<div class="supplier">
+  <div class="supplier-header">ผู้จำหน่าย</div>
+  <div class="supplier-name">{esc(data.get('supplier_name', ''))}</div>
+  <div>{esc(data.get('supplier_address', ''))}</div>
+  {f'<div>เลขประจำตัวผู้เสียภาษี {esc(data.get("supplier_tax_id"))}</div>' if data.get('supplier_tax_id') else ''}
+</div>
+
+<!-- ITEMS TABLE -->
+<table class="items">
+  <thead>
+    <tr>
+      <th class="col-no">#</th>
+      <th class="col-desc">รายละเอียด</th>
+      <th class="col-qty">จำนวน</th>
+      <th class="col-price">ราคาต่อหน่วย</th>
+      <th class="col-total">ยอดรวม</th>
+    </tr>
+  </thead>
+  <tbody>
+    {items_html}
+  </tbody>
+</table>
+
+<!-- TOTALS -->
+<div class="totals-section">
+  <div class="words">({esc(data.get('grand_total_words', ''))})</div>
+  <div class="totals">
+    <div class="total-row">
+      <div class="total-label">รวมเป็นเงิน</div>
+      <div class="total-value">{fmt_money(data.get('total_amount', 0))}</div>
+      <div class="total-unit">บาท</div>
+    </div>
+    <div class="total-row">
+      <div class="total-label">ภาษีมูลค่าเพิ่ม {data.get('vat_rate', 0)}%</div>
+      <div class="total-value">{fmt_money(data.get('vat_amount', 0))}</div>
+      <div class="total-unit">บาท</div>
+    </div>
+    <div class="total-row">
+      <div class="total-label">จำนวนเงินรวมทั้งสิ้น</div>
+      <div class="total-value bold">{fmt_money(data.get('grand_total', 0))}</div>
+      <div class="total-unit">บาท</div>
+    </div>
+    {wht_html}
+  </div>
+</div>
+
+<!-- SIGNATURES (fixed at bottom) -->
+<div class="signatures">
+  <div class="sig-names">
+    <div class="right">ในนาม {esc(data.get('payer_name', ''))}</div>
+  </div>
+  <div class="sig-lines">
+    <div class="sig-block">
+      <div class="sig-line">ผู้อนุมัติ</div>
+      <div class="sig-line">วันที่</div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
+'''
+
+# ─── Generate PDF ───
+font_config = FontConfiguration()
+HTML(string=html_content).write_pdf(out_path, font_config=font_config)
