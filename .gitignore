@@ -12,3 +12,6 @@ patch_*.py
 backend/src/fonts/THSarabunNew*.ttf
 *.bak*
 *.current
+*.bak~*
+*.bak.before-*
+migration_*.sql

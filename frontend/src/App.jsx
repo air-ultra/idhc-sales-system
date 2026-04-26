@@ -111,6 +111,7 @@ const menuItems = [
   { key: 'purchase', icon: '🛒', label: 'ใบสั่งซื้อ' },
   { key: 'withholding', icon: '📄', label: 'หัก ณ ที่จ่าย' },
   { key: 'users', icon: '🔐', label: 'User Management' },
+  { key: 'settings', icon: '⚙️', label: 'ตั้งค่า' },
 ];
 function Sidebar({ active, onNavigate, user, onLogout }) {
   return (
@@ -961,6 +962,7 @@ export default function App() {
         {page === 'purchase' && <PurchaseOrderPage />}
         {page === 'withholding' && <WithholdingTaxPage />}
         {page === 'users' && <UserManagementPage staffList={staffList} />}
+        {page === 'settings' && <SettingsPage />}
       </main>
     </div>
   );
@@ -2688,6 +2690,511 @@ const [items, setItems] = React.useState(() => {
 }
 
 /* ========== PO DETAIL MODAL ========== */
+
+
+/* ========== SETTINGS PAGE ========== */
+function SettingsPage() {
+  const [activeTab, setActiveTab] = useState('banks');
+  return (
+    <div>
+      <div style={styles.pageHeader}>
+        <div style={styles.pageTitle}>⚙️ ตั้งค่าระบบ</div>
+      </div>
+      <div style={styles.card}>
+        <div style={styles.tabs}>
+          <button style={styles.tab(activeTab === 'banks')} onClick={() => setActiveTab('banks')}>
+            🏦 บัญชีธนาคารบริษัท
+          </button>
+        </div>
+        {activeTab === 'banks' && <BankAccountsTab />}
+      </div>
+    </div>
+  );
+}
+
+/* ========== BANK ACCOUNTS TAB ========== */
+function BankAccountsTab() {
+  const [accounts, setAccounts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  const load = () => {
+    setLoading(true);
+    fetch('/api/company-bank-accounts', { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => setAccounts(Array.isArray(d) ? d : []))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+
+  const remove = async (acc) => {
+    if (!confirm(`ลบบัญชี "${acc.bank_name} ${acc.account_number}"?`)) return;
+    const res = await fetch(`/api/company-bank-accounts/${acc.id}`, {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    if (res.ok) {
+      const d = await res.json();
+      if (d.soft) alert(d.message || 'บัญชีถูกใช้ใน PO แล้ว — ปิดการใช้งานแทน');
+      load();
+    } else {
+      alert('ลบไม่สำเร็จ');
+    }
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>กำลังโหลด...</div>;
+
+  return (
+    <div style={{ padding: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div style={{ color: '#6b7280', fontSize: 13 }}>
+          บัญชีธนาคารของบริษัทที่ใช้จ่ายเงินให้ supplier ({accounts.length} บัญชี)
+        </div>
+        <button style={styles.btn('primary')} onClick={() => { setEditing(null); setShowForm(true); }}>
+          + เพิ่มบัญชี
+        </button>
+      </div>
+      {accounts.length === 0 ? (
+        <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af', background: '#fafbfc', borderRadius: 8 }}>
+          ยังไม่มีบัญชี — กด "+ เพิ่มบัญชี" เพื่อเริ่มต้น
+        </div>
+      ) : (
+        <table style={styles.table}>
+          <thead>
+            <tr>
+              <th style={styles.th}>ธนาคาร</th>
+              <th style={styles.th}>สาขา</th>
+              <th style={styles.th}>เลขบัญชี</th>
+              <th style={styles.th}>ชื่อบัญชี</th>
+              <th style={styles.th}>สถานะ</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>จัดการ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {accounts.map(a => (
+              <tr key={a.id}>
+                <td style={styles.td}>
+                  {a.bank_name}
+                  {a.is_default && <span style={{ ...styles.badge('blue'), marginLeft: 8 }}>default</span>}
+                </td>
+                <td style={styles.td}>{a.branch || '-'}</td>
+                <td style={{ ...styles.td, fontFamily: 'monospace' }}>{a.account_number}</td>
+                <td style={styles.td}>{a.account_name}</td>
+                <td style={styles.td}>
+                  {a.is_active
+                    ? <span style={styles.badge('green')}>ใช้งาน</span>
+                    : <span style={styles.badge()}>ปิดใช้งาน</span>}
+                </td>
+                <td style={{ ...styles.td, textAlign: 'right' }}>
+                  <button style={{ ...styles.btn(), padding: '4px 12px', fontSize: 12, marginRight: 6 }}
+                    onClick={() => { setEditing(a); setShowForm(true); }}>แก้ไข</button>
+                  <button style={{ ...styles.btn('danger'), padding: '4px 12px', fontSize: 12 }}
+                    onClick={() => remove(a)}>ลบ</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {showForm && (
+        <BankAccountFormModal
+          account={editing}
+          onClose={() => setShowForm(false)}
+          onSaved={() => { setShowForm(false); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ========== BANK ACCOUNT FORM MODAL ========== */
+function BankAccountFormModal({ account, onClose, onSaved }) {
+  const editing = !!account;
+  const [form, setForm] = useState({
+    bank_name: account?.bank_name || '',
+    branch: account?.branch || '',
+    account_number: account?.account_number || '',
+    account_name: account?.account_name || 'บริษัท ไอเดีย เฮ้าส์ เซ็นเตอร์ จำกัด',
+    is_active: account ? !!account.is_active : true,
+    is_default: account ? !!account.is_default : false,
+    display_order: account?.display_order ?? 0,
+    notes: account?.notes || '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const submit = async () => {
+    setError('');
+    if (!form.bank_name.trim()) { setError('กรุณากรอกชื่อธนาคาร'); return; }
+    if (!form.account_number.trim()) { setError('กรุณากรอกเลขบัญชี'); return; }
+    if (!form.account_name.trim()) { setError('กรุณากรอกชื่อบัญชี'); return; }
+
+    setSaving(true);
+    try {
+      const url = editing ? `/api/company-bank-accounts/${account.id}` : '/api/company-bank-accounts';
+      const method = editing ? 'PUT' : 'POST';
+      const res = await fetch(url, {
+        method,
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || 'บันทึกไม่สำเร็จ');
+      }
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={styles.overlay}>
+      <div style={styles.modal} onClick={e => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <div style={styles.modalTitle}>{editing ? 'แก้ไขบัญชีธนาคาร' : 'เพิ่มบัญชีธนาคาร'}</div>
+          <button style={{ ...styles.btn(), padding: '4px 10px' }} onClick={onClose}>✕</button>
+        </div>
+        <div style={styles.modalBody}>
+          {error && <div style={styles.error}>{error}</div>}
+
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>ธนาคาร *</label>
+            <input style={styles.input} value={form.bank_name}
+              onChange={e => set('bank_name', e.target.value)}
+              placeholder="เช่น ธนาคารกสิกรไทย, ธนาคารกรุงไทย" />
+          </div>
+
+          <div style={styles.formGrid}>
+            <div style={styles.inputGroup}>
+              <label style={styles.label}>สาขา</label>
+              <input style={styles.input} value={form.branch}
+                onChange={e => set('branch', e.target.value)}
+                placeholder="เช่น สาขาสาทร" />
+            </div>
+            <div style={styles.inputGroup}>
+              <label style={styles.label}>เลขบัญชี *</label>
+              <input style={styles.input} value={form.account_number}
+                onChange={e => set('account_number', e.target.value)}
+                placeholder="เช่น 123-4-56789-0" />
+            </div>
+          </div>
+
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>ชื่อบัญชี *</label>
+            <input style={styles.input} value={form.account_name}
+              onChange={e => set('account_name', e.target.value)} />
+          </div>
+
+          <div style={styles.formGrid}>
+            <div style={styles.inputGroup}>
+              <label style={styles.label}>ลำดับการแสดง</label>
+              <input style={styles.input} type="number" value={form.display_order}
+                onChange={e => set('display_order', e.target.value)} />
+            </div>
+            <div style={styles.inputGroup}>
+              <label style={styles.label}>หมายเหตุ</label>
+              <input style={styles.input} value={form.notes}
+                onChange={e => set('notes', e.target.value)} />
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 24, marginTop: 8 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 14 }}>
+              <input type="checkbox" checked={form.is_active}
+                onChange={e => set('is_active', e.target.checked)} />
+              ใช้งาน
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 14 }}>
+              <input type="checkbox" checked={form.is_default}
+                onChange={e => set('is_default', e.target.checked)} />
+              ตั้งเป็นบัญชี default
+            </label>
+          </div>
+        </div>
+        <div style={styles.modalFooter}>
+          <button style={styles.btn()} onClick={onClose} disabled={saving}>ยกเลิก</button>
+          <button style={styles.btn('primary')} onClick={submit} disabled={saving}>
+            {saving ? 'กำลังบันทึก...' : (editing ? 'บันทึก' : 'เพิ่ม')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ========== SLIP LIST (เฉพาะใน PODetail ส่วนการชำระเงิน) ========== */
+function SlipList({ poId }) {
+  const [slips, setSlips] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    fetch(`/api/purchase-orders/${poId}/documents?type=slip`, { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => setSlips(Array.isArray(d) ? d : []))
+      .finally(() => setLoading(false));
+  }, [poId]);
+
+  if (loading) return null;
+  if (slips.length === 0) return null;
+
+  const fmtSize = (n) => {
+    if (!n) return '';
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1048576).toFixed(1) + ' MB';
+  };
+
+  return (
+    <div style={{
+      gridColumn: 'span 3',
+      marginTop: 8, padding: '10px 14px',
+      background: '#fff', border: '1px solid #d1fae5', borderRadius: 6,
+    }}>
+      <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 600, marginBottom: 8 }}>
+        📎 สลิปโอนเงิน ({slips.length})
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {slips.map(s => (
+          <a key={s.id}
+            href={`/api/purchase-orders/${poId}/documents/${s.id}/download?t=${localStorage.getItem('token')}`}
+            target="_blank" rel="noreferrer"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              padding: '6px 10px', background: '#f0fdf4',
+              border: '1px solid #bbf7d0', borderRadius: 6,
+              fontSize: 12, color: '#059669', textDecoration: 'none',
+            }}>
+            🖼️ {s.file_name} <span style={{ color: '#9ca3af' }}>({fmtSize(s.file_size)})</span>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ========== PAY MODAL (Form Modal — overlay ไม่ปิด) ========== */
+function PayModal({ po, onClose, onSuccess }) {
+  const grandTotal = Number(po.grand_total || 0);
+  const whtAmount = Number(po.wht_amount || 0);
+  const netDefault = +(grandTotal - whtAmount).toFixed(2);
+  const today = new Date().toISOString().slice(0, 10);
+
+  const [form, setForm] = useState({
+    payment_date: today,
+    payment_method: 'transfer',
+    payment_reference: '',
+    payment_amount: String(netDefault),
+    payment_notes: '',
+    payment_bank_account_id: '',
+  });
+  const [banks, setBanks] = useState([]);
+  const [slipFiles, setSlipFiles] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  // Load active bank accounts + auto-select default
+  useEffect(() => {
+    fetch('/api/company-bank-accounts?active=1', { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => {
+        const list = Array.isArray(d) ? d : [];
+        setBanks(list);
+        const def = list.find(b => b.is_default) || list[0];
+        if (def) setForm(f => ({ ...f, payment_bank_account_id: String(def.id) }));
+      })
+      .catch(() => {});
+  }, []);
+
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const submit = async () => {
+    setError('');
+    if (!form.payment_date) { setError('กรุณาเลือกวันที่จ่าย'); return; }
+    if (!form.payment_method) { setError('กรุณาเลือกวิธีจ่าย'); return; }
+    if (!form.payment_bank_account_id) { setError('กรุณาเลือกบัญชีธนาคารบริษัท'); return; }
+    const amt = Number(form.payment_amount);
+    if (!amt || amt <= 0) { setError('กรุณากรอกยอดที่จ่าย'); return; }
+
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/purchase-orders/${po.id}/payment`, {
+        method: 'PUT',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          payment_status: 'paid',
+          payment_date: form.payment_date,
+          payment_method: form.payment_method,
+          payment_reference: form.payment_reference || null,
+          payment_amount: amt,
+          payment_notes: form.payment_notes || null,
+          payment_bank_account_id: Number(form.payment_bank_account_id),
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || 'จ่ายเงินไม่สำเร็จ');
+      }
+      const data = await res.json();
+
+      // Upload slip files (if any) — non-blocking failure
+      if (slipFiles.length > 0) {
+        for (const f of slipFiles) {
+          try {
+            const fd = new FormData();
+            fd.append('file', f);
+            fd.append('doc_type', 'slip');
+            await fetch(`/api/purchase-orders/${po.id}/documents`, {
+              method: 'POST', headers: authHeaders(), body: fd,
+            });
+          } catch (e) {
+            console.warn('upload slip failed:', e);
+          }
+        }
+      }
+
+      onSuccess(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const fmt = (n) => Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  return (
+    <div style={styles.overlay}>
+      <div style={styles.modal} onClick={e => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <div style={styles.modalTitle}>💳 จ่ายเงิน — PO: {po.po_number}</div>
+          <button style={{ ...styles.btn(), padding: '4px 10px' }} onClick={onClose}>✕</button>
+        </div>
+        <div style={styles.modalBody}>
+          {/* กล่องสรุปยอด */}
+          <div style={{
+            background: '#fafbfc', border: '1px solid #f0f2f5', borderRadius: 8,
+            padding: '12px 16px', marginBottom: 16, fontSize: 14,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+              <span style={{ color: '#6b7280' }}>ยอดรวม</span>
+              <span><b>{fmt(grandTotal)}</b> บาท</span>
+            </div>
+            {whtAmount > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span style={{ color: '#6b7280' }}>หัก ณ ที่จ่าย</span>
+                <span style={{ color: '#c41556' }}>−{fmt(whtAmount)} บาท</span>
+              </div>
+            )}
+            <div style={{ borderTop: '1px solid #e5e7eb', marginTop: 8, paddingTop: 8,
+                          display: 'flex', justifyContent: 'space-between', fontSize: 16 }}>
+              <span style={{ fontWeight: 600 }}>ยอดสุทธิที่ต้องจ่าย</span>
+              <span style={{ fontWeight: 700, color: '#1e3a5f' }}>{fmt(netDefault)} บาท</span>
+            </div>
+          </div>
+
+          {error && <div style={styles.error}>{error}</div>}
+
+          <div style={styles.formGrid}>
+            <div style={styles.inputGroup}>
+              <label style={styles.label}>วันที่จ่าย *</label>
+              <input style={styles.input} type="date" value={form.payment_date}
+                onChange={e => set('payment_date', e.target.value)} />
+            </div>
+            <div style={styles.inputGroup}>
+              <label style={styles.label}>วิธีจ่าย *</label>
+              <select style={styles.input} value={form.payment_method}
+                onChange={e => set('payment_method', e.target.value)}>
+                <option value="transfer">โอนเงิน</option>
+                <option value="cash">เงินสด</option>
+                <option value="cheque">เช็ค</option>
+              </select>
+            </div>
+          </div>
+
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>จ่ายจากบัญชี *</label>
+            {banks.length === 0 ? (
+              <div style={{
+                padding: '10px 14px', background: '#fef2f2',
+                border: '1px solid #fecaca', borderRadius: 8,
+                fontSize: 13, color: '#dc2626',
+              }}>
+                ⚠️ ยังไม่มีบัญชีธนาคารบริษัท — เพิ่มก่อนที่ <b>⚙️ ตั้งค่า → 🏦 บัญชีธนาคารบริษัท</b>
+              </div>
+            ) : (
+              <select style={styles.input} value={form.payment_bank_account_id}
+                onChange={e => set('payment_bank_account_id', e.target.value)}>
+                <option value="">— เลือกบัญชี —</option>
+                {banks.map(b => (
+                  <option key={b.id} value={b.id}>
+                    {b.bank_name}{b.branch ? ` (${b.branch})` : ''} — {b.account_number} ({b.account_name})
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>เลขอ้างอิง</label>
+            <input style={styles.input} value={form.payment_reference}
+              onChange={e => set('payment_reference', e.target.value)}
+              placeholder="เลขเช็ค / เลขที่อ้างอิงโอน (ถ้ามี)" />
+          </div>
+
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>ยอดที่จ่าย *</label>
+            <input style={styles.input} type="number" step="0.01" value={form.payment_amount}
+              onChange={e => set('payment_amount', e.target.value)} />
+          </div>
+
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>หมายเหตุ</label>
+            <textarea style={{ ...styles.input, minHeight: 60, resize: 'vertical' }}
+              value={form.payment_notes}
+              onChange={e => set('payment_notes', e.target.value)}
+              placeholder="หมายเหตุเพิ่มเติม (ถ้ามี)" />
+          </div>
+
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>📎 แนบสลิปโอนเงิน (เลือกหลายไฟล์ได้)</label>
+            <input type="file" multiple accept="image/*,.pdf"
+              onChange={e => setSlipFiles(Array.from(e.target.files || []))}
+              style={{
+                width: '100%', padding: '8px 10px',
+                border: '1px dashed #d1d5db', borderRadius: 8,
+                fontSize: 13, background: '#fafbfc',
+              }} />
+            {slipFiles.length > 0 && (
+              <div style={{ marginTop: 6, fontSize: 12, color: '#6b7280' }}>
+                เลือกแล้ว {slipFiles.length} ไฟล์: {slipFiles.map(f => f.name).join(', ')}
+              </div>
+            )}
+          </div>
+
+          {whtAmount > 0 && (
+            <div style={{
+              background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8,
+              padding: '10px 14px', fontSize: 13, color: '#2563eb',
+            }}>
+              ℹ️ ระบบจะสร้างใบหัก ณ ที่จ่ายอัตโนมัติเมื่อยืนยันการจ่ายเงิน
+            </div>
+          )}
+        </div>
+        <div style={styles.modalFooter}>
+          <button style={styles.btn()} onClick={onClose} disabled={saving}>ยกเลิก</button>
+          <button style={styles.btn('success')} onClick={submit} disabled={saving}>
+            {saving ? 'กำลังบันทึก...' : '✓ ยืนยันจ่ายเงิน'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PODetailModal({ poId, onClose, onReceive, onEdit }) {
   const [po, setPo] = React.useState(null);
 
@@ -2697,9 +3204,11 @@ function PODetailModal({ poId, onClose, onReceive, onEdit }) {
   };
   const [docs, setDocs] = React.useState([]);
   const [uploading, setUploading] = React.useState(false);
+  const [showPayModal, setShowPayModal] = useState(false);
+  const [cancellingPayment, setCancellingPayment] = useState(false);
   const fileInputRef = React.useRef(null);
   const loadDocs = () => {
-    fetch(`/api/purchase-orders/${poId}/documents`, { headers: authHeaders() })
+    fetch(`/api/purchase-orders/${poId}/documents?type=general`, { headers: authHeaders() })
       .then(r => r.json()).then(d => setDocs(Array.isArray(d) ? d : []));
   };
   React.useEffect(() => { load(); loadDocs(); }, [poId]);
@@ -2767,7 +3276,7 @@ function PODetailModal({ poId, onClose, onReceive, onEdit }) {
     else { const d = await res.json().catch(() => ({})); alert(d.error || 'error'); }
   };
 
-  return (
+  return (<>
     <div style={styles.overlay} onClick={onClose}>
       <div style={{ ...styles.modal, width: 880 }} onClick={e => e.stopPropagation()}>
         <div style={{ ...styles.modalHeader, flexDirection: 'column', alignItems: 'stretch', gap: 12 }}>
@@ -2775,10 +3284,32 @@ function PODetailModal({ poId, onClose, onReceive, onEdit }) {
             <div style={styles.modalTitle}>PO: {po.po_number}</div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               {po.payment_status === 'paid' ? (
-                <span style={{ ...styles.badge('green'), padding: '6px 10px' }}>✓ ชำระแล้ว</span>
+                <>
+                  <span style={{ ...styles.badge('green'), padding: '6px 10px' }}>
+                    ✓ ชำระแล้ว {po.payment_date ? `(${new Date(po.payment_date).toLocaleDateString('th-TH')})` : ''}
+                  </span>
+                  <button style={{ ...styles.btn('danger'), padding: '6px 10px', fontSize: 12 }}
+                    disabled={cancellingPayment}
+                    onClick={async () => {
+                      const msg = po.withholding_id
+                        ? 'ยกเลิกการจ่ายเงิน?\nระบบจะยกเลิกใบหัก ณ ที่จ่ายที่ผูกกับ PO นี้ด้วย'
+                        : 'ยกเลิกการจ่ายเงิน?';
+                      if (!confirm(msg)) return;
+                      setCancellingPayment(true);
+                      try {
+                        const res = await fetch(`/api/purchase-orders/${poId}/payment/cancel`, {
+                          method: 'POST', headers: authHeaders(),
+                        });
+                        if (res.ok) { load(); }
+                        else { const d = await res.json().catch(() => ({})); alert(d.error || 'ยกเลิกไม่สำเร็จ'); }
+                      } finally { setCancellingPayment(false); }
+                    }}>
+                    {cancellingPayment ? '...' : '↶ ยกเลิก'}
+                  </button>
+                </>
               ) : (po.status === 'approved' || po.status === 'received') ? (
                 <button style={{ ...styles.btn('success'), padding: '6px 12px', fontSize: 13 }}
-                  onClick={() => alert('ฟังก์ชันจ่ายเงินจะเปิดใช้งานในรอบถัดไปค่ะพี่ 🙏')}>
+                  onClick={() => setShowPayModal(true)}>
                   💳 จ่ายเงิน
                 </button>
               ) : null}
@@ -2879,6 +3410,111 @@ function PODetailModal({ poId, onClose, onReceive, onEdit }) {
           )}
         </div>
 
+        {/* ═══ การชำระเงิน ═══ */}
+        <div style={{ marginTop: 20 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: '#1e3a5f', marginBottom: 10 }}>
+            💳 การชำระเงิน
+          </div>
+          {po.payment_status === 'paid' ? (
+            <div style={{
+              background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8,
+              padding: '14px 16px',
+            }}>
+              <div style={{
+                display: 'grid', gridTemplateColumns: '1fr 1fr 1fr',
+                gap: '12px 24px', marginBottom: 10,
+              }}>
+                <div>
+                  <div style={styles.fieldLabel}>วันที่จ่าย</div>
+                  <div style={styles.fieldValue}>
+                    {po.payment_date ? new Date(po.payment_date).toLocaleDateString('th-TH') : '-'}
+                  </div>
+                </div>
+                <div>
+                  <div style={styles.fieldLabel}>วิธีจ่าย</div>
+                  <div style={styles.fieldValue}>
+                    {po.payment_method === 'transfer' ? 'โอนเงิน'
+                     : po.payment_method === 'cash' ? 'เงินสด'
+                     : po.payment_method === 'cheque' ? 'เช็ค'
+                     : (po.payment_method || '-')}
+                  </div>
+                </div>
+                <div>
+                  <div style={styles.fieldLabel}>ยอดที่จ่าย</div>
+                  <div style={{ ...styles.fieldValue, fontWeight: 700, color: '#059669' }}>
+                    {Number(po.payment_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท
+                  </div>
+                </div>
+                {po.payment_bank_name && (
+                  <div style={{ gridColumn: 'span 3' }}>
+                    <div style={styles.fieldLabel}>จ่ายจากบัญชี</div>
+                    <div style={styles.fieldValue}>
+                      🏦 {po.payment_bank_name}
+                      {po.payment_bank_branch ? ` (${po.payment_bank_branch})` : ''}
+                      {' — '}
+                      <span style={{ fontFamily: 'monospace' }}>{po.payment_account_number}</span>
+                      {' '}({po.payment_account_name})
+                    </div>
+                  </div>
+                )}
+                {po.payment_reference && (
+                  <div style={{ gridColumn: 'span 3' }}>
+                    <div style={styles.fieldLabel}>เลขอ้างอิง</div>
+                    <div style={styles.fieldValue}>{po.payment_reference}</div>
+                  </div>
+                )}
+                {po.payment_notes && (
+                  <div style={{ gridColumn: 'span 3' }}>
+                    <div style={styles.fieldLabel}>หมายเหตุ</div>
+                    <div style={styles.fieldValue}>{po.payment_notes}</div>
+                  </div>
+                )}
+              </div>
+
+              <SlipList poId={po.id} />
+
+              {po.withholding_id && po.withholding_doc_no && (
+                <div style={{
+                  marginTop: 8, padding: '10px 14px',
+                  background: '#fff', border: '1px solid #fbcfe8', borderRadius: 6,
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                }}>
+                  <div>
+                    <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>ใบหัก ณ ที่จ่าย</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#c41556', marginTop: 2 }}>
+                      📄 {po.withholding_doc_no}
+                    </div>
+                  </div>
+                  <button style={{ ...styles.btn('primary'), padding: '6px 14px', fontSize: 13 }}
+                    onClick={() => window.open(`/api/withholding-tax/${po.withholding_id}/pdf?t=${localStorage.getItem('token')}`, '_blank')}>
+                    🖨️ ดู PDF
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (po.status === 'approved' || po.status === 'received') ? (
+            <div style={{
+              padding: 24, textAlign: 'center',
+              background: '#fafbfc', borderRadius: 8, border: '1px dashed #d1d5db',
+            }}>
+              <div style={{ color: '#6b7280', fontSize: 14, marginBottom: 12 }}>
+                ยังไม่ได้ชำระเงิน
+              </div>
+              <button style={styles.btn('success')}
+                onClick={() => setShowPayModal(true)}>
+                💳 จ่ายเงิน
+              </button>
+            </div>
+          ) : (
+            <div style={{
+              padding: 16, textAlign: 'center',
+              background: '#fafbfc', borderRadius: 8, color: '#9ca3af', fontSize: 14,
+            }}>
+              จะจ่ายเงินได้หลังจากอนุมัติ PO
+            </div>
+          )}
+        </div>
+
         {/* ═══ เอกสารแนบ ═══ */}
         <div style={{ marginTop: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
@@ -2962,7 +3598,8 @@ function PODetailModal({ poId, onClose, onReceive, onEdit }) {
         </div>
       </div>
     </div>
-  );
+    {showPayModal && <PayModal po={po} onClose={() => setShowPayModal(false)} onSuccess={() => { setShowPayModal(false); load(); }} />}
+  </>);
 }
 
 /* ============================================================
