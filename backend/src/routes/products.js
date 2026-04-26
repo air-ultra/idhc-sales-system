@@ -171,6 +171,21 @@ router.delete('/:id/serials/:serialId', authenticate, async (req, res) => {
   }
 });
 
+/* ========== HELPER: validate category ==========
+   ห้ามผูกสินค้ากับหมวดที่มี subcategory (ต้องเลือก subcategory แทน)
+================================================== */
+async function validateCategoryIsLeaf(category_id) {
+  if (!category_id) return null; // ไม่เลือก = ผ่าน
+  const childrenCheck = await query(
+    `SELECT COUNT(*) AS c FROM product_categories WHERE parent_id = $1`,
+    [category_id]
+  );
+  if (parseInt(childrenCheck.rows[0].c) > 0) {
+    return 'หมวดหมู่นี้มีหมวดย่อย — กรุณาเลือกหมวดย่อย';
+  }
+  return null;
+}
+
 /* ========== CREATE product ========== */
 router.post('/', authenticate, async (req, res) => {
   try {
@@ -180,6 +195,9 @@ router.post('/', authenticate, async (req, res) => {
     } = req.body;
 
     if (!name) return res.status(400).json({ error: 'name required' });
+
+    const catErr = await validateCategoryIsLeaf(category_id);
+    if (catErr) return res.status(400).json({ error: catErr });
 
     const last = await query(`SELECT product_code FROM products ORDER BY id DESC LIMIT 1`);
     let nextNum = 1;
@@ -214,6 +232,9 @@ router.put('/:id', authenticate, async (req, res) => {
       name, model, description, category_id, product_type,
       default_unit, cost_price, sell_price
     } = req.body;
+
+    const catErr = await validateCategoryIsLeaf(category_id);
+    if (catErr) return res.status(400).json({ error: catErr });
 
     const result = await query(
       `UPDATE products SET

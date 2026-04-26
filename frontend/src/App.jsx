@@ -2770,37 +2770,58 @@ function PODetailModal({ poId, onClose, onReceive, onEdit }) {
   return (
     <div style={styles.overlay} onClick={onClose}>
       <div style={{ ...styles.modal, width: 880 }} onClick={e => e.stopPropagation()}>
-        <div style={styles.modalHeader}>
-          <div>
+        <div style={{ ...styles.modalHeader, flexDirection: 'column', alignItems: 'stretch', gap: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
             <div style={styles.modalTitle}>PO: {po.po_number}</div>
-            <div style={{ ...styles.detailSub, marginTop: 4 }}>
-              ผู้จำหน่าย: {po.supplier_name} · วันที่: {new Date(po.po_date).toLocaleDateString('th-TH')}
-              {po.credit_days > 0 && (
-                <> · เครดิต {po.credit_days} วัน · ครบกำหนด {po.due_date ? new Date(po.due_date).toLocaleDateString('th-TH') : '-'}</>
-              )}
-            </div>
-            {(po.ordered_by_name || po.job_name) && (
-              <div style={{ ...styles.detailSub, marginTop: 2 }}>
-                {po.ordered_by_name && <>ผู้สั่งซื้อ: {po.ordered_by_name}</>}
-                {po.ordered_by_name && po.job_name && ' · '}
-                {po.job_name && <>ชื่องาน: {po.job_name}</>}
-              </div>
-            )}
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-            {po.payment_status === 'paid' ? (
-              <span style={{ ...styles.badge('green'), padding: '6px 10px' }}>✓ ชำระแล้ว</span>
-            ) : po.status === 'received' ? (
-              <button style={{ ...styles.btn('success'), padding: '6px 12px', fontSize: 13 }}
-                onClick={() => alert('ฟังก์ชันจ่ายเงินจะเปิดใช้งานในรอบถัดไปค่ะพี่ 🙏')}>
-                💳 จ่ายเงิน
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              {po.payment_status === 'paid' ? (
+                <span style={{ ...styles.badge('green'), padding: '6px 10px' }}>✓ ชำระแล้ว</span>
+              ) : (po.status === 'approved' || po.status === 'received') ? (
+                <button style={{ ...styles.btn('success'), padding: '6px 12px', fontSize: 13 }}
+                  onClick={() => alert('ฟังก์ชันจ่ายเงินจะเปิดใช้งานในรอบถัดไปค่ะพี่ 🙏')}>
+                  💳 จ่ายเงิน
+                </button>
+              ) : null}
+              <button style={{ ...styles.btn('primary'), padding: '6px 12px', fontSize: 13 }}
+                onClick={() => window.open(`/api/purchase-orders/${poId}/pdf?t=${localStorage.getItem('token')}`, '_blank')}>
+                🖨️ พิมพ์ PDF
               </button>
-            ) : null}
-            <button style={{ ...styles.btn('primary'), padding: '6px 12px', fontSize: 13 }}
-              onClick={() => window.open(`/api/purchase-orders/${poId}/pdf?t=${localStorage.getItem('token')}`, '_blank')}>
-              🖨️ พิมพ์ PDF
-            </button>
-            <button style={{ ...styles.btn(), padding: '4px 10px' }} onClick={onClose}>✕</button>
+              <button style={{ ...styles.btn(), padding: '4px 10px' }} onClick={onClose}>✕</button>
+            </div>
+          </div>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(3, 1fr)',
+            gap: '12px 24px',
+            padding: '12px 14px',
+            background: '#fafbfc',
+            borderRadius: 8,
+            border: '1px solid #f0f2f5'
+          }}>
+            <div>
+              <div style={styles.fieldLabel}>วันที่</div>
+              <div style={styles.fieldValue}>{po.po_date ? new Date(po.po_date).toLocaleDateString('th-TH') : '-'}</div>
+            </div>
+            <div>
+              <div style={styles.fieldLabel}>เครดิต</div>
+              <div style={styles.fieldValue}>{po.credit_days > 0 ? `${po.credit_days} วัน` : '-'}</div>
+            </div>
+            <div>
+              <div style={styles.fieldLabel}>ครบกำหนด</div>
+              <div style={styles.fieldValue}>{po.due_date ? new Date(po.due_date).toLocaleDateString('th-TH') : '-'}</div>
+            </div>
+            <div style={{ gridColumn: 'span 3', borderTop: '1px solid #f0f2f5', paddingTop: 12 }}>
+              <div style={styles.fieldLabel}>ผู้จำหน่าย</div>
+              <div style={styles.fieldValue}>{po.supplier_name || '-'}</div>
+            </div>
+            <div style={{ gridColumn: 'span 3' }}>
+              <div style={styles.fieldLabel}>ชื่องาน</div>
+              <div style={styles.fieldValue}>{po.job_name || '-'}</div>
+            </div>
+            <div style={{ gridColumn: 'span 3' }}>
+              <div style={styles.fieldLabel}>ผู้สั่งซื้อ</div>
+              <div style={styles.fieldValue}>{po.ordered_by_name || '-'}</div>
+            </div>
           </div>
         </div>
         <div style={styles.modalBody}>
