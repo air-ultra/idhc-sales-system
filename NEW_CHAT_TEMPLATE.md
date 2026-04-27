@@ -17,6 +17,8 @@
 - styles object ที่มีอยู่
 - pattern backend (query, getClient, authenticate)
 - schema columns (supplier_id, po_date, grand_total, etc.)
+- DB enum values (employee_type, status, etc.) — ไม่เดา query ก่อน
+- PDF engine = WeasyPrint (ห้ามใช้ ReportLab)
 - Modal rules (form modal ห้ามปิดเมื่อคลิก overlay)
 - กับดักที่ต้องระวัง
 - feature ที่ทำเสร็จแล้ว (จะได้ไม่ทำซ้ำ)
@@ -46,11 +48,14 @@ Context:
 2. Backend import: const { query, getClient } = require('../config/database')
 3. Column names เฉพาะ: supplier_id / po_date / grand_total / quantity /
    product_code / default_unit / status='draft' (ไม่ใช่ 'pending')
-4. Form modal: ไม่ใส่ onClick={onClose} บน overlay
+4. PDF engine = WeasyPrint (HTML→PDF) — ห้ามใช้ ReportLab
+5. Form modal: ไม่ใส่ onClick={onClose} บน overlay
    View modal (Detail): ใส่ onClick={onClose} บน overlay ได้
-5. ภาษาไทย เรียก "พี่"
-6. ส่งไฟล์ครบให้ upload ผ่าน WinSCP — ไม่ต้อง sed ยาว ๆ
-7. ถ้า block ใหญ่ซับซ้อน ใช้ Python script แทน sed
+6. ภาษาไทย เรียก "พี่"
+7. ส่งไฟล์ครบให้ upload ผ่าน WinSCP — ไม่ต้อง sed ยาว ๆ
+8. ถ้า block ใหญ่ซับซ้อน ใช้ Python script แทน sed
+9. ห้ามเดา enum value — query DB ก่อนเสมอ
+10. ตรวจ 3 ชั้นเสมอ: disk → container → runtime
 
 วันนี้อยากทำ: [บอกงานที่จะทำ]
 ```
@@ -58,6 +63,37 @@ Context:
 ---
 
 ## 🎯 Tips เพิ่มเติม
+
+### ⚠️ เวลาแก้ไฟล์แล้ว "เหมือนไม่เห็นผล" (ใหม่จาก Phase 2.10)
+**ปัญหา:** Dockerfile ใช้ `COPY src/ ./src/` → ไฟล์ถูก bake เข้า image ตอน build
+แค่ restart **ไม่พอ** ต้อง rebuild image ใหม่
+
+**ตรวจ 3 ชั้นเสมอ:**
+```bash
+# 1. Disk (ไฟล์บนเซิร์ฟเวอร์)
+ls -la backend/src/utils/generate_payroll_pdf.py
+
+# 2. Container (ไฟล์ที่กำลังรันจริง)
+docker compose exec sales-api ls -la /app/src/utils/generate_payroll_pdf.py
+
+# 3. Verify ว่าเนื้อหาตรงกัน
+docker compose exec sales-api grep -c "บางคำที่ผมแก้" /app/src/utils/generate_payroll_pdf.py
+```
+
+ถ้าไฟล์ใน container เก่า → **rebuild!** ไม่ใช่ restart
+
+### ⚠️ ห้ามเดา enum value (ใหม่จาก Phase 2.10)
+ก่อน group/filter ตามค่า column → query ดูค่าจริงใน DB ก่อนเสมอ:
+
+```bash
+docker compose exec -T sales-db psql -U sales_admin -d sales_system -c "
+SELECT column_name, COUNT(*) FROM table_name GROUP BY column_name ORDER BY 2 DESC;"
+```
+
+**ตัวอย่าง enum values ที่ต้องรู้:**
+- `staff_salary.employee_type`: `monthly` (รายเดือน) | `daily` (รายวัน) | `contract` (รายสัญญาจ้าง)
+- `payroll.status`: `draft` | `approved`
+- `purchase_orders.status`: `draft` | `approved` | ...
 
 ### เวลา Claude เริ่มเดา schema ให้ทัก
 ถ้า Claude เริ่มเขียน SQL แล้วใช้ชื่อ column แปลก ๆ เช่น `vendor_id`, `order_date`
@@ -68,6 +104,8 @@ Context:
 \d po_items
 \d po_documents
 \d product_serials
+\d staff_salary
+\d payroll
 ```
 
 ### เวลาผลลัพธ์ไม่ตรงที่คิด
@@ -80,9 +118,10 @@ Context:
 
 ### เวลาแก้แล้วไม่เห็นผล
 ```bash
-docker compose down
-docker rmi sales-system-sales-api sales-system-sales-web
-docker compose up -d --build
+docker compose down sales-api
+docker rmi sales-system-sales-api
+docker compose up -d --build sales-api
+docker compose logs --tail 15 sales-api
 ```
 
 ### เวลา Backend crash (หน้าเว็บขึ้น "Unexpected token '<'")
@@ -117,7 +156,12 @@ hard-code อยู่ใน 2 ที่:
 | Feature | สถานะ | Route/Page |
 |---|---|---|
 | Staff | ✅ Done | `/staff` |
-| Payroll | ✅ Done | `/payroll` |
+| Departments | ✅ Done | `Settings > 🏢 แผนก` |
+| Payroll: รายการเงินเดือน | ✅ Done | `/payroll` |
+| Payroll: ยกเลิกอนุมัติ | ✅ Done (Phase 2.10) | ปุ่ม 🔓 |
+| Payroll: รายงาน Excel/PDF | ✅ Done (Phase 2.10) | `/api/payroll-export/*` |
+| Payroll: สลิปเงินเดือน | ✅ Done (Phase 2.10) | `/api/payroll-documents/payslip` |
+| Payroll: สปส. 1-10 PDF+Excel | ✅ Done (Phase 2.10) | `/api/payroll-documents/sso[/excel]` |
 | Users/Roles | ✅ Done | `/users` |
 | Withholding Tax | ✅ Done | `/withholding` |
 | Stock (products/suppliers/categories) | ✅ Done | `คลังสินค้า` |
@@ -148,3 +192,5 @@ hard-code อยู่ใน 2 ที่:
 5. **"ส่งไฟล์ครบให้ upload แทน sed"** — กันคำสั่ง sed ยาว ๆ ที่พังง่าย
 6. **"เช็คว่า block นี้อยู่ใน component ไหน"** — ก่อนแก้ใช้ `awk` ตรวจ scope
 7. **"backup ก่อนแล้วค่อยแก้"** — `cp file file.bak` ก่อน edit ใหญ่
+8. **"ตรวจในคอนเทนเนอร์ ไม่ใช่แค่บนดิสก์"** — กันแก้แล้วไม่เห็นผล (Phase 2.10)
+9. **"ดูค่าจริงใน DB ก่อน อย่าเดา"** — กันพลาดเรื่อง enum (Phase 2.10)

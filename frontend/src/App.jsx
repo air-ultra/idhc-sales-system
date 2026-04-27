@@ -1087,6 +1087,23 @@ function PayrollPage() {
     catch (err) { setMsg('Error: ' + err.message); }
   };
 
+  const handleUnapprove = async () => {
+    if (!confirm(`ยืนยันยกเลิกการอนุมัติเงินเดือน ${monthNames[month]} ${year + 543}?\n\nรายการจะกลับเป็น "ร่าง" และสามารถแก้ไขได้อีกครั้ง`)) return;
+    setMsg('');
+    try {
+      const res = await fetch(`/api/payroll/unapprove/${year}/${month}`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Unapprove failed');
+      setMsg(data.message);
+      load();
+    } catch (err) {
+      setMsg('Error: ' + err.message);
+    }
+  };
+
   const handleDeleteMonth = async () => {
     if (!confirm(`ยืนยันลบรายการเงินเดือน ${monthNames[month]} ${year + 543} ทั้งหมด?`)) return;
     setMsg('');
@@ -1122,6 +1139,37 @@ function PayrollPage() {
     catch (err) { alert(err.message); }
   };
 
+  const handleExport = async (kind) => {
+    // kind: 'payroll-excel' | 'payroll-pdf' | 'payslip' | 'sso-pdf' | 'sso-excel'
+    const map = {
+      'payroll-excel': { url: `/api/payroll-export/excel?year=${year}&month=${month}`, name: `PayrollReport_${year}_${String(month).padStart(2,'0')}.xlsx` },
+      'payroll-pdf':   { url: `/api/payroll-export/pdf?year=${year}&month=${month}`,   name: `PayrollReport_${year}_${String(month).padStart(2,'0')}.pdf` },
+      'payslip':       { url: `/api/payroll-documents/payslip?year=${year}&month=${month}`, name: `PaySlips_${year}_${String(month).padStart(2,'0')}.pdf` },
+      'sso-pdf':       { url: `/api/payroll-documents/sso?year=${year}&month=${month}`,     name: `SSO_1-10_${year}_${String(month).padStart(2,'0')}.pdf` },
+      'sso-excel':     { url: `/api/payroll-documents/sso/excel?year=${year}&month=${month}`, name: `SSO_1-10_${year}_${String(month).padStart(2,'0')}.xlsx` },
+    };
+    const cfg = map[kind];
+    if (!cfg) return;
+    setMsg('');
+    try {
+      const res = await fetch(cfg.url, { headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` } });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Export failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = cfg.name;
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setMsg(`ดาวน์โหลด ${cfg.name} สำเร็จ`);
+    } catch (err) {
+      setMsg('Error: ' + err.message);
+    }
+  };
+
   const startEdit = (r) => {
     setEditId(r.id);
     setEditForm({ bonus: r.bonus || 0, overtime: r.overtime || 0, other_income: r.other_income || 0, other_deduction: r.other_deduction || 0 });
@@ -1139,6 +1187,7 @@ function PayrollPage() {
   const totalTax = records.reduce((s, r) => s + parseFloat(r.withholding_tax || 0), 0);
   const totalNet = records.reduce((s, r) => s + parseFloat(r.net_pay || 0), 0);
   const hasDraft = records.some(r => r.status === 'draft');
+  const hasApproved = records.some(r => r.status === 'approved');
 
   return (
     <div>
@@ -1156,8 +1205,18 @@ function PayrollPage() {
         </select>
         <button style={styles.btn('primary')} onClick={handleGenerate}>สร้างรายการเงินเดือน</button>
         {records.length > 0 && hasDraft && <button style={styles.btn('success')} onClick={handleApprove}>อนุมัติทั้งหมด</button>}
+        {records.length > 0 && hasApproved && !hasDraft && <button style={{ ...styles.btn('default'), background: '#fef3c7', borderColor: '#fcd34d', color: '#92400e' }} onClick={handleUnapprove}>🔓 ยกเลิกอนุมัติ</button>}
         {records.length > 0 && <button style={styles.btn('default')} onClick={openAddStaff}>+ เพิ่มพนักงาน</button>}
         {records.length > 0 && hasDraft && <button style={styles.btn('danger')} onClick={handleDeleteMonth}>ลบทั้งเดือน</button>}
+        {records.length > 0 && (
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button style={styles.btn('default')} onClick={() => handleExport('payroll-excel')} title="รายงานเงินเดือน Excel">📊 รายงาน Excel</button>
+            <button style={styles.btn('default')} onClick={() => handleExport('payroll-pdf')} title="รายงานเงินเดือน PDF">📄 รายงาน PDF</button>
+            <button style={styles.btn('default')} onClick={() => handleExport('payslip')} title="สลิปเงินเดือนทุกคน (PDF)">🧾 สลิปเงินเดือน</button>
+            <button style={styles.btn('default')} onClick={() => handleExport('sso-pdf')} title="สปส. 1-10 PDF (สำหรับเก็บ)">🏥 สปส. PDF</button>
+            <button style={styles.btn('default')} onClick={() => handleExport('sso-excel')} title="สปส. 1-10 Excel (e-Filing)">🏥 สปส. Excel</button>
+          </div>
+        )}
       </div>
 
       {msg && <div style={msg.startsWith('Error') ? styles.error : styles.success}>{msg}</div>}
@@ -2856,8 +2915,12 @@ function SettingsPage() {
           <button style={styles.tab(activeTab === 'banks')} onClick={() => setActiveTab('banks')}>
             🏦 บัญชีธนาคารบริษัท
           </button>
+          <button style={styles.tab(activeTab === 'departments')} onClick={() => setActiveTab('departments')}>
+            🏢 แผนก
+          </button>
         </div>
         {activeTab === 'banks' && <BankAccountsTab />}
+        {activeTab === 'departments' && <DepartmentsTab />}
       </div>
     </div>
   );
@@ -3076,6 +3139,186 @@ function BankAccountFormModal({ account, onClose, onSaved }) {
     </div>
   );
 }
+
+/* ========== DEPARTMENTS TAB ========== */
+function DepartmentsTab() {
+  const [departments, setDepartments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  const load = () => {
+    setLoading(true);
+    fetch('/api/departments', { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => setDepartments(Array.isArray(d) ? d : []))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+
+  const remove = async (dept) => {
+    if (!confirm(`ลบแผนก "${dept.name}"?`)) return;
+    const res = await fetch(`/api/departments/${dept.id}`, {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    if (res.ok) {
+      const d = await res.json();
+      if (d.soft) alert(d.message || 'แผนกนี้มีพนักงานผูกอยู่ — ปิดการใช้งานแทน');
+      load();
+    } else {
+      const d = await res.json().catch(() => ({}));
+      alert(d.error || 'ลบไม่สำเร็จ');
+    }
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>กำลังโหลด...</div>;
+
+  return (
+    <div style={{ padding: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div style={{ color: '#6b7280', fontSize: 13 }}>
+          แผนกในบริษัท ({departments.length} แผนก)
+        </div>
+        <button style={styles.btn('primary')} onClick={() => { setEditing(null); setShowForm(true); }}>
+          + เพิ่มแผนก
+        </button>
+      </div>
+      {departments.length === 0 ? (
+        <div style={{ padding: 40, textAlign: 'center', color: '#9ca3af', background: '#fafbfc', borderRadius: 8 }}>
+          ยังไม่มีแผนก — กด "+ เพิ่มแผนก" เพื่อเริ่มต้น
+        </div>
+      ) : (
+        <table style={styles.table}>
+          <thead>
+            <tr>
+              <th style={styles.th}>รหัส</th>
+              <th style={styles.th}>ชื่อแผนก</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>พนักงาน</th>
+              <th style={styles.th}>สถานะ</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>จัดการ</th>
+            </tr>
+          </thead>
+          <tbody>
+            {departments.map(d => (
+              <tr key={d.id}>
+                <td style={{ ...styles.td, fontFamily: 'monospace' }}>{d.code}</td>
+                <td style={styles.td}>{d.name}</td>
+                <td style={{ ...styles.td, textAlign: 'right' }}>
+                  {Number(d.staff_count) > 0
+                    ? <span style={styles.badge('blue')}>{d.staff_count} คน</span>
+                    : <span style={{ color: '#9ca3af' }}>-</span>}
+                </td>
+                <td style={styles.td}>
+                  {d.is_active
+                    ? <span style={styles.badge('green')}>ใช้งาน</span>
+                    : <span style={styles.badge()}>ปิดใช้งาน</span>}
+                </td>
+                <td style={{ ...styles.td, textAlign: 'right' }}>
+                  <button style={{ ...styles.btn(), padding: '4px 12px', fontSize: 12, marginRight: 6 }}
+                    onClick={() => { setEditing(d); setShowForm(true); }}>แก้ไข</button>
+                  <button style={{ ...styles.btn('danger'), padding: '4px 12px', fontSize: 12 }}
+                    onClick={() => remove(d)}>ลบ</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {showForm && (
+        <DepartmentFormModal
+          department={editing}
+          onClose={() => setShowForm(false)}
+          onSaved={() => { setShowForm(false); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ========== DEPARTMENT FORM MODAL ========== */
+function DepartmentFormModal({ department, onClose, onSaved }) {
+  const editing = !!department;
+  const [form, setForm] = useState({
+    name: department?.name || '',
+    code: department?.code || '',
+    is_active: department ? !!department.is_active : true,
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  const submit = async () => {
+    setError('');
+    if (!form.name.trim()) { setError('กรุณากรอกชื่อแผนก'); return; }
+    if (!form.code.trim()) { setError('กรุณากรอกรหัสแผนก'); return; }
+
+    setSaving(true);
+    try {
+      const url = editing ? `/api/departments/${department.id}` : '/api/departments';
+      const method = editing ? 'PUT' : 'POST';
+      const res = await fetch(url, {
+        method,
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || 'บันทึกไม่สำเร็จ');
+      }
+      onSaved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={styles.overlay}>
+      <div style={styles.modal} onClick={e => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <div style={styles.modalTitle}>{editing ? 'แก้ไขแผนก' : 'เพิ่มแผนก'}</div>
+          <button style={{ ...styles.btn(), padding: '4px 10px' }} onClick={onClose}>✕</button>
+        </div>
+        <div style={styles.modalBody}>
+          {error && <div style={styles.error}>{error}</div>}
+
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>ชื่อแผนก *</label>
+            <input style={styles.input} value={form.name}
+              onChange={e => set('name', e.target.value)}
+              placeholder="เช่น ฝ่ายขาย, ฝ่ายบัญชี" />
+          </div>
+
+          <div style={styles.inputGroup}>
+            <label style={styles.label}>รหัสแผนก *</label>
+            <input style={styles.input} value={form.code}
+              onChange={e => set('code', e.target.value.toUpperCase())}
+              placeholder="เช่น SALES, ACCT, HR (ตัวอักษรพิมพ์ใหญ่)" />
+            <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>
+              รหัสต้องไม่ซ้ำกับแผนกอื่น
+            </div>
+          </div>
+
+          <div style={styles.inputGroup}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input type="checkbox" checked={form.is_active}
+                onChange={e => set('is_active', e.target.checked)} />
+              <span>ใช้งาน</span>
+            </label>
+          </div>
+        </div>
+        <div style={styles.modalFooter}>
+          <button style={styles.btn()} onClick={onClose} disabled={saving}>ยกเลิก</button>
+          <button style={styles.btn('primary')} onClick={submit} disabled={saving}>
+            {saving ? 'กำลังบันทึก...' : 'บันทึก'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 
 /* ========== SLIP LIST (เฉพาะใน PODetail ส่วนการชำระเงิน) ========== */

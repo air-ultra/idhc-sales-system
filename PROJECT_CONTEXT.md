@@ -509,6 +509,31 @@ created_at, updated_at
 
 ---
 
+
+### Enum Values (สำคัญ — ห้ามเดา query ก่อน)
+
+```sql
+-- staff_salary.employee_type
+'monthly'    -- รายเดือน (default)
+'daily'      -- รายวัน
+'contract'   -- รายสัญญาจ้าง / จ้างเหมา
+
+-- payroll.status
+'draft'      -- ร่าง (แก้ไขได้)
+'approved'   -- อนุมัติแล้ว (ต้องยกเลิกอนุมัติก่อน → กลับเป็น draft)
+
+-- purchase_orders.status
+'draft' | 'approved' | 'received' | 'cancelled'
+```
+
+**ทุกครั้งที่จะ filter/group ตาม column enum:**
+```bash
+docker compose exec -T sales-db psql -U sales_admin -d sales_system -c \
+  "SELECT column_name, COUNT(*) FROM table_name GROUP BY column_name ORDER BY 2 DESC;"
+```
+
+**บทเรียน Phase 2.10:** ผม assume ว่า `employee_type` มีแค่ `monthly`/`daily` แต่จริงๆ มี `contract` ด้วย → รายงานเงินเดือนไม่แยกกลุ่มถูกต้อง → ต้องแก้รอบ 2
+
 ## 🧮 8. Business Logic ที่ตกลงไว้
 
 ### ต้นทุนสินค้า (Cost)
@@ -1100,6 +1125,54 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
   - PODetail: column ภ.ง.ด.รายตัว
   - Sync income_type options ใน PO Form ใช้ INCOME_TYPES (เลิก hardcode '40(8)')
 
+### Phase 2.10 — Payroll Documents & Workflow (2026-04-27 evening)
+
+#### 📄 รายงานเงินเดือน
+- ✅ **Excel:** `GET /api/payroll-export/excel?year=Y&month=M` (รวมแถว formula SUM)
+- ✅ **PDF:** `GET /api/payroll-export/pdf?year=Y&month=M` (WeasyPrint, A4 landscape)
+- ✅ **แบ่ง 3 กลุ่มอัตโนมัติ** ตาม `staff_salary.employee_type`:
+  - 🏷️ **รายเดือน** (`monthly`) → กลุ่ม 1
+  - 🏷️ **รายสัญญาจ้าง** (`contract`) → กลุ่ม 2
+  - 🏷️ **รายวัน** (`daily`) → กลุ่ม 3
+- ✅ Subtotal แต่ละกลุ่ม (formula SUM ใน Excel) + label สีฟ้าอ่อน (#e6f4fb) + summary ท้ายตาราง
+- ✅ ปกส.ที่ต้องนำส่ง = `SUM(social_security) × 2` (ลูกจ้าง + นายจ้าง)
+
+#### 🧾 สลิปเงินเดือน
+- ✅ **Bulk:** `GET /api/payroll-documents/payslip?year=Y&month=M` — PDF 2 สลิป/หน้า A4 portrait
+- ✅ **Single:** `+ &staff_id=N` — สลิปคนเดียว
+- ✅ **ยอดสุทธิเป็นตัวอักษรไทย** ("หกหมื่นห้าพันสี่ร้อย...บาท...สตางค์") — ฟังก์ชัน `num_to_thai()` ใน script
+- ✅ เส้นประคั่นกลางหน้าสำหรับพับ/ตัด
+
+#### 🏥 สปส. 1-10
+- ✅ **PDF:** `GET /api/payroll-documents/sso?year=Y&month=M` (สำหรับเก็บแฟ้ม)
+- ✅ **Excel:** `GET /api/payroll-documents/sso/excel?year=Y&month=M` (format e-Filing — sheet name `'000000'` + 6 คอลัมน์เป๊ะ)
+- ✅ กรองอัตโนมัติเฉพาะ `staff_salary.social_security_eligible = true`
+- ✅ PDF ใช้ค่าจ้างหลัง cap (max 17,500); Excel ใช้ค่าจ้างจริง (ไม่ cap — ระบบ สปส. cap เอง)
+
+#### 🔓 ยกเลิกการอนุมัติ Payroll
+- ✅ Backend: `PUT /api/payroll/unapprove/:year/:month`
+- ✅ Frontend: ปุ่ม **🔓 ยกเลิกอนุมัติ** สีเหลืองอำพัน — แสดงเฉพาะตอนทุกแถว approved แล้ว
+
+#### 📤 ปุ่ม Export ในหน้า Payroll
+- ✅ 5 ปุ่มมุมขวาบนของ controls bar:
+  - 📊 รายงาน Excel · 📄 รายงาน PDF · 🧾 สลิปเงินเดือน · 🏥 สปส. PDF · 🏥 สปส. Excel
+- ✅ แสดงเฉพาะตอน `records.length > 0`
+
+#### 🛠️ Files ใหม่
+- `backend/src/utils/generate_payroll_pdf.py` (WeasyPrint)
+- `backend/src/utils/generate_payroll_excel.js` (exceljs)
+- `backend/src/utils/generate_payslip_pdf.py` (WeasyPrint)
+- `backend/src/utils/generate_sso_pdf.py` (WeasyPrint)
+- `backend/src/utils/generate_sso_excel.js` (exceljs — format e-Filing)
+- `backend/src/routes/payroll-export.js`
+- `backend/src/routes/payroll-documents.js`
+
+#### ⚠️ บทเรียนสำคัญ Phase 2.10
+1. **PDF ใช้ WeasyPrint เท่านั้น** (ห้าม ReportLab) — เริ่มแรกใช้ ReportLab → สระไทยซ้อนทับ → ต้อง refactor เป็น WeasyPrint
+2. **ห้ามเดา enum value** — assume `employee_type` มีแค่ 2 ค่าจริงๆมี 3 → ต้องแก้รอบ 2
+3. **ตรวจ 3 ชั้นเสมอ** (Disk → Container → Runtime) — ไฟล์ใน VM ใหม่แล้ว แต่ container ยังใช้ของเก่าเพราะลืม rebuild
+
+
 ### Backup & Tooling (2026-04-25)
 - ✅ **`backup.sh`** — full backup script (DB dump + source tar + junk cleanup + .gitignore update)
 - ✅ Backup files อยู่ที่ `~/sales-system-backups/`
@@ -1131,9 +1204,11 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 
 ---
 
-**Last Updated:** 2026-04-27 (long session — Phase 2.7→B2 + reset test data)
+**Last Updated:** 2026-04-27 evening (Phase 2.10 — Payroll Documents complete)
 
 **Latest Commits:**
+- `c088ccf` — docs: update PROJECT_CONTEXT.md for Phase 2.7-B2
+- `c6f8a39` — feat: PO Form แบบ ภ.ง.ด. + Multi-WHT per (ภ.ง.ด. × ประเภท) (Phase B2)
 - `eb143f8` — feat: PO modal→page + WHT rate dropdown + multi-page PDF (Phase A + B1)
 - `323d1f5` — feat: per-item income_type + multi-WHT per PO (Phase 2.9)
 - `90f7cfd` — feat: pay modal + bank accounts + slip upload (Phase 2.7-2.8)
@@ -1142,7 +1217,10 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 - `aff5595` — chore: add backup script and .gitignore rules
 - `86def56` — feat(po): add per-item description field
 - `55ff3ce` — feat(po): switch PO PDF to WeasyPrint with proper Thai vowel rendering
-- `744f3df` — fix(suppliers): add PUT /:id as alias for PATCH /:id
 
 **Pending commit:**
-- Phase B2 — PO Form แบบ ภ.ง.ด. + Multi-WHT per (ภ.ง.ด. × ประเภท) — staged, ready to commit
+- Phase 2.10 — Payroll Documents & Workflow (รายงานเงินเดือน + สลิป + สปส. + unapprove + ปุ่ม Export)
+- Department CRUD route (จาก phase ก่อน)
+- Move db scripts → db/scripts/
+- Volume mount in docker-compose.yml (dev hot-reload)
+- Update PROJECT_CONTEXT.md + NEW_CHAT_TEMPLATE.md + CHANGELOG.md

@@ -7,12 +7,15 @@ const staffRoutes = require('./routes/staff');
 const userRoutes = require('./routes/users');
 const staffDetailRoutes = require('./routes/staffDetail');
 const payrollRoutes = require('./routes/payroll');
+const payrollExportRoutes = require('./routes/payroll-export');
+const payrollDocumentsRoutes = require('./routes/payroll-documents');
 const withholdingRoutes = require('./routes/withholdingTax');
 const productRoutes = require('./routes/products');
 const supplierRoutes = require('./routes/suppliers');
 const poRoutes = require('./routes/purchaseOrders');
 const categoryRoutes = require('./routes/product-categories');
 const companyBankRoutes = require('./routes/companyBankAccounts');
+const departmentRoutes = require('./routes/departments');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -38,12 +41,15 @@ app.use('/api/auth', authRoutes);
 app.use('/api/staff', staffRoutes);
 app.use('/api/staff', staffDetailRoutes);
 app.use('/api/payroll', payrollRoutes);
+app.use('/api/payroll-export', payrollExportRoutes);
+app.use('/api/payroll-documents', payrollDocumentsRoutes);
 app.use('/api/withholding', withholdingRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/suppliers', supplierRoutes);
 app.use('/api/purchase-orders', poRoutes);
 app.use('/api/product-categories', categoryRoutes);
 app.use('/api/company-bank-accounts', companyBankRoutes);
+app.use('/api/departments', departmentRoutes);
 app.use('/api/users', userRoutes);
 
 // Error handler

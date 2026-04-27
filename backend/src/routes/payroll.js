@@ -118,6 +118,24 @@ router.put('/approve/:year/:month', authenticate, async (req, res) => {
     res.status(500).json({ error: 'Failed to approve payroll' });
   }
 });
+// PUT /api/payroll/unapprove/:year/:month - Cancel approval (revert to draft)
+router.put('/unapprove/:year/:month', authenticate, async (req, res) => {
+  try {
+    const result = await query(
+      `UPDATE payroll SET status = 'draft', approved_by = NULL, updated_at = NOW()
+       WHERE year = $1 AND month = $2 AND status = 'approved'`,
+      [req.params.year, req.params.month]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'ไม่มีรายการที่อนุมัติแล้วในเดือนนี้' });
+    }
+    res.json({ message: `ยกเลิกการอนุมัติเงินเดือน ${req.params.month}/${req.params.year} สำเร็จ (${result.rowCount} รายการ)` });
+  } catch (err) {
+    console.error('unapprove payroll:', err);
+    res.status(500).json({ error: 'Failed to unapprove payroll' });
+  }
+});
+
 
 // GET /api/payroll/staff/:staffId - Get payroll history for a staff member
 router.get('/staff/:staffId', authenticate, async (req, res) => {
