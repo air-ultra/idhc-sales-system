@@ -1893,6 +1893,8 @@ function StockPage() {
   const [suppliers, setSuppliers] = React.useState([]);
   const [categories, setCategories] = React.useState([]);
   const [filterType, setFilterType] = React.useState('');
+  const [filterMain, setFilterMain] = React.useState('');  // หมวดหลัก
+  const [filterSub, setFilterSub] = React.useState('');    // หมวดย่อย
   const [search, setSearch] = React.useState('');
   const [showProductForm, setShowProductForm] = React.useState(false);
   const [editProduct, setEditProduct] = React.useState(null);
@@ -1947,13 +1949,29 @@ function StockPage() {
                 <input style={styles.searchInput}
                   placeholder="ค้นหา รหัส / ชื่อ / model"
                   value={search} onChange={e => setSearch(e.target.value)} />
-                <select style={{ ...styles.searchInput, flex: 'none', width: 180 }} value={filterType}
+                <select style={{ ...styles.searchInput, flex: 'none', width: 140 }} value={filterType}
                   onChange={e => setFilterType(e.target.value)}>
                   <option value="">ทุกประเภท</option>
                   <option value="service">บริการ</option>
                   <option value="non_stock">สินค้าเหมา</option>
                   <option value="stock">นับสต็อก</option>
                 </select>
+                <select style={{ ...styles.searchInput, flex: 'none', width: 160 }} value={filterMain}
+                  onChange={e => { setFilterMain(e.target.value); setFilterSub(''); }}>
+                  <option value="">ทุกหมวด</option>
+                  {categories.filter(c => !c.parent_id).map(m => (
+                    <option key={m.id} value={m.id}>{m.name}</option>
+                  ))}
+                </select>
+                {filterMain && categories.some(c => c.parent_id === parseInt(filterMain, 10)) && (
+                  <select style={{ ...styles.searchInput, flex: 'none', width: 160 }} value={filterSub}
+                    onChange={e => setFilterSub(e.target.value)}>
+                    <option value="">ทั้งหมดในหมวดนี้</option>
+                    {categories.filter(c => c.parent_id === parseInt(filterMain, 10)).map(s => (
+                      <option key={s.id} value={s.id}>↳ {s.name}</option>
+                    ))}
+                  </select>
+                )}
                 <button style={styles.btn('primary')} onClick={() => { setEditProduct(null); setShowProductForm(true); }}>
                   + เพิ่มสินค้า
                 </button>
@@ -1974,7 +1992,16 @@ function StockPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {products.map(p => (
+                  {products.filter(p => {
+                    // ไม่เลือกอะไร → แสดงทั้งหมด
+                    if (!filterMain) return true;
+                    const mainId = parseInt(filterMain, 10);
+                    // เลือกเฉพาะหมวดย่อย → ตรง category_id เป๊ะ
+                    if (filterSub) return p.category_id === parseInt(filterSub, 10);
+                    // เลือกหมวดหลัก → ตรง main เอง หรือเป็นหมวดย่อยใต้ main
+                    const subIds = categories.filter(c => c.parent_id === mainId).map(c => c.id);
+                    return p.category_id === mainId || subIds.includes(p.category_id);
+                  }).map(p => (
                     <tr key={p.id} style={styles.trHover}>
                       <td style={styles.td}>
                         <a style={{ color: '#2563eb', textDecoration: 'underline', cursor: 'pointer' }}
@@ -2121,7 +2148,12 @@ function ProductFormModal({ product, categories, onClose, onSaved }) {
               <select style={styles.input} value={form.category_id || ''}
                 onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
                 <option value="">-- เลือก --</option>
-                {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {categories.filter(c => !c.parent_id).flatMap(main => [
+                  <option key={main.id} value={main.id}>{main.name}</option>,
+                  ...categories.filter(c => c.parent_id === main.id).map(sub => (
+                    <option key={sub.id} value={sub.id}>{'\u00A0\u00A0\u00A0\u00A0↳ '}{sub.name}</option>
+                  ))
+                ])}
               </select>
             </div>
             <div style={{ gridColumn: 'span 2' }}>
@@ -2399,23 +2431,48 @@ function SupplierFormModal({ supplier, onClose, onSaved }) {
 /* ========== CATEGORIES TAB ========== */
 function CategoriesTab({ categories, onReload }) {
   const [newName, setNewName] = React.useState('');
+  const [newParent, setNewParent] = React.useState('');  // '' = หมวดหลัก, ตัวเลข = หมวดย่อยของหมวดนั้น
+
+  // หมวดหลัก = parent_id null/undefined
+  const mains = categories.filter(c => !c.parent_id);
+  // map parent_id -> children
+  const childrenOf = (parentId) => categories.filter(c => c.parent_id === parentId);
+
   const add = async () => {
     if (!newName.trim()) return;
-    await fetch('/api/product-categories', {
+    const body = { name: newName.trim() };
+    if (newParent) body.parent_id = parseInt(newParent, 10);
+    const res = await fetch('/api/product-categories', {
       method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: newName.trim() }),
+      body: JSON.stringify(body),
     });
-    setNewName(''); onReload();
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert('Error: ' + (data.error || 'เพิ่มไม่สำเร็จ'));
+      return;
+    }
+    setNewName(''); setNewParent(''); onReload();
   };
-  const remove = async (id) => {
-    if (!confirm('ลบหมวดนี้?')) return;
+  const remove = async (id, name, hasChildren) => {
+    const msg = hasChildren
+      ? `ลบ "${name}" และหมวดย่อยทั้งหมด?`
+      : `ลบ "${name}"?`;
+    if (!confirm(msg)) return;
     await fetch(`/api/product-categories/${id}`, { method: 'DELETE', headers: authHeaders() });
     onReload();
   };
+
   return (
-    <div style={{ maxWidth: 600 }}>
-      <div style={styles.searchBar}>
-        <input style={styles.searchInput} placeholder="ชื่อหมวดหมู่ใหม่"
+    <div style={{ maxWidth: 700 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        <select style={{ ...styles.input, width: 200, flex: 'none' }}
+          value={newParent} onChange={e => setNewParent(e.target.value)}>
+          <option value="">— เพิ่มเป็นหมวดหลัก —</option>
+          {mains.map(m => (
+            <option key={m.id} value={m.id}>↳ เพิ่มในหมวด: {m.name}</option>
+          ))}
+        </select>
+        <input style={{ ...styles.searchInput, flex: 1 }} placeholder={newParent ? 'ชื่อหมวดย่อย' : 'ชื่อหมวดหลัก'}
           value={newName} onChange={e => setNewName(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && add()} />
         <button style={styles.btn('primary')} onClick={add}>+ เพิ่ม</button>
@@ -2423,23 +2480,40 @@ function CategoriesTab({ categories, onReload }) {
       <table style={styles.table}>
         <thead>
           <tr>
-            <th style={styles.th}>ชื่อ</th>
-            <th style={styles.th}></th>
+            <th style={styles.th}>หมวดหมู่</th>
+            <th style={{ ...styles.th, width: 110 }}>รหัส</th>
+            <th style={{ ...styles.th, width: 80 }}></th>
           </tr>
         </thead>
         <tbody>
-          {categories.map(c => (
-            <tr key={c.id}>
-              <td style={styles.td}>{c.name}</td>
-              <td style={styles.td}>
-                <button style={{ ...styles.btn('danger'), padding: '4px 10px', fontSize: 12 }}
-                  onClick={() => remove(c.id)}>ลบ</button>
-              </td>
-            </tr>
-          ))}
-          {categories.length === 0 && (
-            <tr><td style={{ ...styles.td, textAlign: 'center', color: '#888', padding: 30 }} colSpan="2">ไม่มีข้อมูล</td></tr>
+          {mains.length === 0 && (
+            <tr><td style={{ ...styles.td, textAlign: 'center', color: '#888', padding: 30 }} colSpan="3">ไม่มีข้อมูล</td></tr>
           )}
+          {mains.map(m => {
+            const subs = childrenOf(m.id);
+            return (
+              <React.Fragment key={m.id}>
+                <tr>
+                  <td style={{ ...styles.td, fontWeight: 600 }}>📁 {m.name}</td>
+                  <td style={{ ...styles.td, color: '#888', fontSize: 12 }}>{m.code || '-'}</td>
+                  <td style={styles.td}>
+                    <button style={{ ...styles.btn('danger'), padding: '4px 10px', fontSize: 12 }}
+                      onClick={() => remove(m.id, m.name, subs.length > 0)}>ลบ</button>
+                  </td>
+                </tr>
+                {subs.map(s => (
+                  <tr key={s.id}>
+                    <td style={{ ...styles.td, paddingLeft: 36, color: '#555' }}>↳ {s.name}</td>
+                    <td style={{ ...styles.td, color: '#888', fontSize: 12 }}>{s.code || '-'}</td>
+                    <td style={styles.td}>
+                      <button style={{ ...styles.btn('danger'), padding: '4px 10px', fontSize: 12 }}
+                        onClick={() => remove(s.id, s.name, false)}>ลบ</button>
+                    </td>
+                  </tr>
+                ))}
+              </React.Fragment>
+            );
+          })}
         </tbody>
       </table>
     </div>

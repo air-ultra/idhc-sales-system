@@ -95,6 +95,21 @@ SELECT column_name, COUNT(*) FROM table_name GROUP BY column_name ORDER BY 2 DES
 - `payroll.status`: `draft` | `approved`
 - `purchase_orders.status`: `draft` | `approved` | ...
 
+### ⚠️ ก่อน patch ฟีเจอร์ใดๆ — verify ว่ามีอยู่แล้วหรือยัง (ใหม่จาก Phase 2.11)
+**ปัญหา:** Compaction summary ระหว่าง chat อาจตกหล่น — บอกว่า "patch X pending" ทั้งที่เสร็จแล้ว
+
+**วิธีป้องกัน:** ก่อน patch ทุกครั้ง grep code จริงก่อนเสมอ
+
+```bash
+# ตัวอย่าง: ก่อนทำฟีเจอร์ subcategory
+grep -nE "parent_id|filterMain|หมวดย่อย" frontend/src/App.jsx | head
+
+# ถ้ามี → ฟีเจอร์มีอยู่แล้ว ห้าม patch ซ้ำ
+# ถ้าไม่มี → ค่อย patch
+```
+
+**ประโยคที่พี่ทักได้:** "verify ก่อน patch — เช็คว่ามีฟีเจอร์อยู่แล้วไหม"
+
 ### เวลา Claude เริ่มเดา schema ให้ทัก
 ถ้า Claude เริ่มเขียน SQL แล้วใช้ชื่อ column แปลก ๆ เช่น `vendor_id`, `order_date`
 → บอกว่า **"หยุดก่อน ดู schema จริงก่อน"** แล้วให้มันรันคำสั่ง:

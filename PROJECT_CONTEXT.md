@@ -1173,6 +1173,14 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 3. **ตรวจ 3 ชั้นเสมอ** (Disk → Container → Runtime) — ไฟล์ใน VM ใหม่แล้ว แต่ container ยังใช้ของเก่าเพราะลืม rebuild
 
 
+### Phase 2.11 — Subcategory UI Restored (2026-04-27 night)
+- ✅ **CategoriesTab** — dropdown หมวดหลัก + tree view (📁 + ↳ indent)
+- ✅ **ProductFormModal** — dropdown indent หมวดย่อยใต้หมวดหลัก (มีอยู่แล้ว)
+- ✅ **StockPage filter** — cascade dropdown หมวดหลัก → หมวดย่อย (มีอยู่แล้ว)
+- ⚠️ **บทเรียน:** UI subcategory เคยทำแล้วแต่หาย (`App.jsx.bak_subcategory` 0 bytes) → ก่อน patch ใหม่ต้อง grep verify ก่อนเสมอ ห้ามเชื่อ compaction summary
+
+
+
 ### Backup & Tooling (2026-04-25)
 - ✅ **`backup.sh`** — full backup script (DB dump + source tar + junk cleanup + .gitignore update)
 - ✅ Backup files อยู่ที่ `~/sales-system-backups/`

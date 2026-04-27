@@ -6,6 +6,26 @@
 
 ---
 
+## [Phase 2.11 — Subcategory UI Restored] — 2026-04-27 night
+
+### Added
+- **CategoriesTab UI** — รองรับ parent_id เต็มรูปแบบ (เดิมเป็นแค่ flat list)
+  - Dropdown "เพิ่มเป็นหมวดหลัก / เพิ่มในหมวด: X"
+  - Tree view: 📁 หมวดหลัก + ↳ indent หมวดย่อย
+  - Confirm dialog ตอนลบหมวดหลักที่มีลูก (CASCADE delete)
+- **ProductFormModal** — dropdown หมวดหมู่แบบ indent (มีอยู่แล้วก่อน chat นี้)
+- **StockPage filter** — cascade dropdown หมวดหลัก → หมวดย่อย (มีอยู่แล้วก่อน chat นี้)
+
+### Fixed
+- UI subcategory เคยถูกเขียนแล้วแต่หายไประหว่าง chat ก่อนๆ (`App.jsx.bak_subcategory` ขนาด 0 bytes)
+- Backend (`product-categories.js` + DB trigger `trg_enforce_category_depth`) พร้อมอยู่แล้ว — ขาดแค่ UI
+
+### Lesson Learned
+- **อย่าเชื่อ compaction summary** — code จริงคือ source of truth
+- ก่อน patch ใหม่ → grep ก่อนเสมอ ป้องกัน duplicate work
+
+---
+
 ## [Phase 2.10 — Payroll Documents & Workflow] — 2026-04-27
 
 ### Added
