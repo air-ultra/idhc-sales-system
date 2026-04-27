@@ -100,7 +100,6 @@ router.get('/:id', authenticate, async (req, res) => {
               s.tax_id AS supplier_tax_id, s.address AS supplier_address,
               s.phone AS supplier_phone,
               CONCAT(st.first_name_th, ' ', st.last_name_th) AS ordered_by_name,
-              wht.doc_no AS withholding_doc_no,
               cba.bank_name AS payment_bank_name,
               cba.branch AS payment_bank_branch,
               cba.account_number AS payment_account_number,
@@ -108,7 +107,6 @@ router.get('/:id', authenticate, async (req, res) => {
        FROM purchase_orders po
        LEFT JOIN suppliers s ON s.id = po.supplier_id
        LEFT JOIN staff st ON st.id = po.ordered_by_staff_id
-       LEFT JOIN withholding_tax wht ON wht.id = po.withholding_id
        LEFT JOIN company_bank_accounts cba ON cba.id = po.payment_bank_account_id
        WHERE po.id = $1`,
       [id]
@@ -127,7 +125,32 @@ router.get('/:id', authenticate, async (req, res) => {
       [id]
     );
 
-    res.json({ ...po.rows[0], items: items.rows });
+    // ดึงใบ WHT ทั้งหมดที่ผูกกับ PO
+    const whts = await query(
+      `SELECT id, doc_no, total_income, total_tax, income_type, status
+       FROM withholding_tax
+       WHERE source_po_id = $1
+       ORDER BY id`, [id]
+    );
+
+    // backward-compat: ถ้ายังไม่มีใบจาก source_po_id แต่ purchase_orders.withholding_id ไม่ null → ใช้อันนั้น
+    let withholding_docs = whts.rows;
+    if (withholding_docs.length === 0 && po.rows[0].withholding_id) {
+      const legacy = await query(
+        `SELECT id, doc_no, total_income, total_tax, income_type, status
+         FROM withholding_tax WHERE id = $1`,
+        [po.rows[0].withholding_id]
+      );
+      withholding_docs = legacy.rows;
+    }
+
+    res.json({
+      ...po.rows[0],
+      items: items.rows,
+      withholding_docs,
+      // legacy field for backward-compat with old frontend
+      withholding_doc_no: withholding_docs.length > 0 ? withholding_docs[0].doc_no : null,
+    });
   } catch (err) {
     console.error('GET /purchase-orders/:id error:', err);
     res.status(500).json({ error: err.message });
@@ -173,8 +196,22 @@ router.post('/', authenticate, async (req, res) => {
       const itemWhtAmount = +(lineTotal * itemWhtRate / 100).toFixed(2);
       total_amount += lineTotal;
       wht_amount += itemWhtAmount;
-      return { ...it, line_total: lineTotal, wht_rate: itemWhtRate, wht_amount: itemWhtAmount };
+      return {
+        ...it,
+        line_total: lineTotal,
+        wht_rate: itemWhtRate,
+        wht_amount: itemWhtAmount,
+        income_type: itemWhtRate > 0 ? (it.income_type || null) : null,
+      };
     });
+    // Validation: ทุก item ที่มี wht_rate > 0 ต้องเลือกประเภทเงินได้
+    const missingType = itemsWithCalc.find(it => Number(it.wht_rate) > 0 && !it.income_type);
+    if (missingType) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        error: `รายการที่มีหัก ณ ที่จ่ายต้องระบุประเภทเงินได้ทุกตัว`
+      });
+    }
     const vat_amount = total_amount * (Number(vat_rate || 0) / 100);
     const grand_total = total_amount + vat_amount;
 
@@ -200,12 +237,12 @@ router.post('/', authenticate, async (req, res) => {
 
     for (const it of itemsWithCalc) {
       await client.query(
-        `INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price, description, wht_rate, wht_amount)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        `INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price, description, wht_rate, wht_amount, income_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [po.id, it.product_id, it.unit || 'ชิ้น',
          it.quantity, it.unit_price, it.line_total,
          it.description || null,
-         it.wht_rate, it.wht_amount]
+         it.wht_rate, it.wht_amount, it.income_type]
       );
     }
 
@@ -502,8 +539,22 @@ router.put('/:id', authenticate, async (req, res) => {
       const itemWhtAmount = +(lineTotal * itemWhtRate / 100).toFixed(2);
       total_amount += lineTotal;
       wht_amount += itemWhtAmount;
-      return { ...it, line_total: lineTotal, wht_rate: itemWhtRate, wht_amount: itemWhtAmount };
+      return {
+        ...it,
+        line_total: lineTotal,
+        wht_rate: itemWhtRate,
+        wht_amount: itemWhtAmount,
+        income_type: itemWhtRate > 0 ? (it.income_type || null) : null,
+      };
     });
+    // Validation: ทุก item ที่มี wht_rate > 0 ต้องเลือกประเภทเงินได้
+    const missingType = itemsWithCalc.find(it => Number(it.wht_rate) > 0 && !it.income_type);
+    if (missingType) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        error: `รายการที่มีหัก ณ ที่จ่ายต้องระบุประเภทเงินได้ทุกตัว`
+      });
+    }
     const vat_amount = total_amount * (Number(vat_rate || 0) / 100);
     const grand_total = total_amount + vat_amount;
 
@@ -538,12 +589,12 @@ router.put('/:id', authenticate, async (req, res) => {
 
     for (const it of itemsWithCalc) {
       await client.query(
-        `INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price, description, wht_rate, wht_amount)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        `INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price, description, wht_rate, wht_amount, income_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [id, it.product_id, it.unit || 'ชิ้น',
          it.quantity, it.unit_price, it.line_total,
          it.description || null,
-         it.wht_rate, it.wht_amount]
+         it.wht_rate, it.wht_amount, it.income_type]
       );
     }
 
@@ -677,21 +728,45 @@ async function createWHTForPO(client, poId, userId, opts = {}) {
   }
   const po = poRes.rows[0];
 
-  if (po.withholding_id) {
+  // ตรวจว่ามีใบ WHT linked กับ PO นี้แล้วหรือยัง
+  const existingWht = await client.query(
+    `SELECT id FROM withholding_tax WHERE source_po_id = $1`, [poId]
+  );
+  if (existingWht.rows.length > 0) {
     throw new Error('PO นี้สร้างใบหัก ณ ที่จ่ายไปแล้ว');
   }
 
-  // ใช้ wht_amount ที่อยู่ใน purchase_orders แล้ว (sum จาก po_items per-item)
-  const tax = Number(po.wht_amount || 0);
-  if (tax <= 0) {
+  // ดึง items ที่มี wht — group by income_type
+  const itemsRes = await client.query(
+    `SELECT pi.*, p.name AS product_name
+     FROM po_items pi
+     LEFT JOIN products p ON p.id = pi.product_id
+     WHERE pi.po_id = $1 AND pi.wht_rate > 0
+     ORDER BY pi.id`, [poId]
+  );
+  if (itemsRes.rows.length === 0) {
     throw new Error('PO ไม่มียอดหัก ณ ที่จ่าย ไม่ต้องสร้างใบหัก ณ ที่จ่าย');
   }
-  // income = total_amount (ก่อน VAT) — ใช้เป็น base ของใบ 50 ทวิ
-  const income = Number(po.total_amount);
-  // rate effective = tax / income * 100  (สำหรับเก็บใน purchase_orders.wht_rate เพื่ออ้างอิง)
-  const effectiveRate = income > 0 ? +(tax / income * 100).toFixed(2) : 0;
 
-  // gen doc_no
+  // Group items ตาม income_type
+  const groups = {};
+  for (const it of itemsRes.rows) {
+    const type = it.income_type || 'ม.3 เตรส'; // fallback (ไม่ควรเกิดเพราะ validate ตอนสร้าง PO)
+    if (!groups[type]) groups[type] = [];
+    groups[type].push(it);
+  }
+
+  // Helper: ตัดสินใจ pnd_form จาก income_type
+  // (ปกติ ม.3 เตรส = ภ.ง.ด.3 หรือ 53 ขึ้นกับ payee เป็นบุคคล/นิติบุคคล)
+  // ที่นี่ default ภ.ง.ด.3 — override ด้วย opts.pnd_form ถ้าต้องการ
+  const pickPndForm = (incomeType) => {
+    return opts.pnd_form || 'ภ.ง.ด.3';
+  };
+
+  const issueDate = opts.issue_date || new Date();
+  const withholdMethod = opts.withhold_method || 1;
+
+  // gen doc_no prefix สำหรับเดือนนี้
   const now = new Date();
   const yyyy = now.getFullYear();
   const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -706,63 +781,89 @@ async function createWHTForPO(client, poId, userId, opts = {}) {
     const m = last.rows[0].doc_no.match(new RegExp(`^${prefix}(\\d+)$`));
     if (m) seq = parseInt(m[1]) + 1;
   }
-  const doc_no = `${prefix}${String(seq).padStart(4, '0')}`;
 
-  const issueDate = opts.issue_date || new Date();
-  const pndForm = opts.pnd_form || 'ภ.ง.ด.3';
-  const incomeType = opts.income_type || 'ม.3 เตรส';
-  const incomeDesc = opts.income_desc || po.job_name || `ค่าจาก PO ${po.po_number}`;
-  const withholdMethod = opts.withhold_method || 1;
+  const createdWhts = [];
 
-  // insert withholding_tax
-  const whtRes = await client.query(
-    `INSERT INTO withholding_tax
-       (doc_no, tax_year, issue_date,
-        payer_name, payer_tax_id, payer_address,
-        payee_name, payee_tax_id, payee_address,
-        pnd_form, pnd_seq, income_type, income_desc,
-        total_income, total_tax, withhold_method, tax_words,
-        status, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-             $10, 1, $11, $12, $13, $14, $15, $16, 'draft', $17)
-     RETURNING *`,
-    [
-      doc_no, yyyy,
-      issueDate,
-      'บริษัท ไอเดีย เฮ้าส์ เซ็นเตอร์ จำกัด (สำนักงานใหญ่)',
-      '0105556022070',
-      'เลขที่ 80 อาคาร เค.เอ.เอ็น.เพลส ห้องเลขที่ 104 ชั้น 1 ซ.นราธิวาสราชนครินทร์ 8 แขวงทุ่งวัดดอน เขตสาทร กรุงเทพฯ 10120',
-      po.supplier_name,
-      po.supplier_tax_id || '',
-      po.supplier_address || '',
-      pndForm, incomeType, incomeDesc,
-      income, tax,
-      withholdMethod,
-      numToThaiWords(tax),
-      userId
-    ]
-  );
-  const wht = whtRes.rows[0];
+  // Loop: สร้างใบ WHT 1 ใบต่อ income_type
+  for (const [incomeType, groupItems] of Object.entries(groups)) {
+    const groupIncome = groupItems.reduce((s, it) => s + Number(it.total_price), 0);
+    const groupTax = groupItems.reduce((s, it) => s + Number(it.wht_amount), 0);
 
-  // insert item (1 row — รวมทั้ง PO เป็นรายการเดียว)
-  await client.query(
-    `INSERT INTO withholding_tax_items
-       (wht_id, pay_date, description, income_amount, tax_amount, pnd_form, income_type)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [wht.id, issueDate, incomeDesc, income, tax, pndForm, incomeType]
-  );
+    if (groupTax <= 0) continue;
 
-  // link กลับไปที่ PO (เก็บ effectiveRate ไว้อ้างอิง — ไม่กระทบ per-item ใน po_items)
-  await client.query(
-    `UPDATE purchase_orders
-     SET withholding_id = $1,
-         wht_rate = $2,
-         updated_at = NOW()
-     WHERE id = $3`,
-    [wht.id, effectiveRate, poId]
-  );
+    const doc_no = `${prefix}${String(seq).padStart(4, '0')}`;
+    seq++;
 
-  return wht;
+    const incomeDesc = opts.income_desc
+      || po.job_name
+      || groupItems.map(g => g.product_name).filter(Boolean).join(', ').slice(0, 200)
+      || `ค่าจาก PO ${po.po_number}`;
+
+    const pndForm = pickPndForm(incomeType);
+
+    const whtRes = await client.query(
+      `INSERT INTO withholding_tax
+         (doc_no, tax_year, issue_date,
+          payer_name, payer_tax_id, payer_address,
+          payee_name, payee_tax_id, payee_address,
+          pnd_form, pnd_seq, income_type, income_desc,
+          total_income, total_tax, withhold_method, tax_words,
+          status, created_by, source_po_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+               $10, 1, $11, $12, $13, $14, $15, $16, 'draft', $17, $18)
+       RETURNING *`,
+      [
+        doc_no, yyyy,
+        issueDate,
+        'บริษัท ไอเดีย เฮ้าส์ เซ็นเตอร์ จำกัด (สำนักงานใหญ่)',
+        '0105556022070',
+        'เลขที่ 80 อาคาร เค.เอ.เอ็น.เพลส ห้องเลขที่ 104 ชั้น 1 ซ.นราธิวาสราชนครินทร์ 8 แขวงทุ่งวัดดอน เขตสาทร กรุงเทพฯ 10120',
+        po.supplier_name,
+        po.supplier_tax_id || '',
+        po.supplier_address || '',
+        pndForm, incomeType, incomeDesc,
+        groupIncome, groupTax,
+        withholdMethod,
+        numToThaiWords(groupTax),
+        userId,
+        poId
+      ]
+    );
+    const wht = whtRes.rows[0];
+
+    // insert items — 1 row ต่อ po_item ที่อยู่ในกลุ่มนี้
+    for (const gi of groupItems) {
+      const itemDesc = (gi.description || gi.product_name || `รายการ ${gi.id}`).slice(0, 500);
+      await client.query(
+        `INSERT INTO withholding_tax_items
+           (wht_id, pay_date, description, income_amount, tax_amount, pnd_form, income_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [wht.id, issueDate, itemDesc,
+         Number(gi.total_price), Number(gi.wht_amount),
+         pndForm, incomeType]
+      );
+    }
+
+    createdWhts.push(wht);
+  }
+
+  // Update PO — เก็บ withholding_id ของใบแรก (legacy compat) + effectiveRate
+  if (createdWhts.length > 0) {
+    const totalTax = createdWhts.reduce((s, w) => s + Number(w.total_tax), 0);
+    const totalIncome = createdWhts.reduce((s, w) => s + Number(w.total_income), 0);
+    const effectiveRate = totalIncome > 0 ? +(totalTax / totalIncome * 100).toFixed(2) : 0;
+    await client.query(
+      `UPDATE purchase_orders
+       SET withholding_id = $1,
+           wht_rate = $2,
+           updated_at = NOW()
+       WHERE id = $3`,
+      [createdWhts[0].id, effectiveRate, poId]
+    );
+  }
+
+  // Return: ใบแรก (เพื่อ backward-compat) + array ของทุกใบ
+  return { ...createdWhts[0], _all_whts: createdWhts };
 }
 
 /* ========== UPDATE PAYMENT INFO ========== */
@@ -830,22 +931,29 @@ router.put('/:id/payment', authenticate, async (req, res) => {
 
     await client.query('COMMIT');
 
-    // ดึงข้อมูล PO ล่าสุด (รวม withholding_doc_no + bank info) ส่งกลับ
+    // ดึงข้อมูล PO ล่าสุด + ใบ WHT ทั้งหมดที่ผูกกับ PO
     const finalRes = await query(
       `SELECT po.*,
-              wht.doc_no AS withholding_doc_no,
               cba.bank_name AS payment_bank_name,
               cba.branch AS payment_bank_branch,
               cba.account_number AS payment_account_number,
               cba.account_name AS payment_account_name
        FROM purchase_orders po
-       LEFT JOIN withholding_tax wht ON wht.id = po.withholding_id
        LEFT JOIN company_bank_accounts cba ON cba.id = po.payment_bank_account_id
        WHERE po.id = $1`, [id]
     );
+    const whtsRes = await query(
+      `SELECT id, doc_no, total_income, total_tax, income_type, status
+       FROM withholding_tax
+       WHERE source_po_id = $1
+       ORDER BY id`, [id]
+    );
     res.json({
       ...finalRes.rows[0],
-      _wht_created: whtCreated ? { id: whtCreated.id, doc_no: whtCreated.doc_no } : null
+      withholding_docs: whtsRes.rows,
+      _wht_created: whtCreated && whtCreated._all_whts
+        ? whtCreated._all_whts.map(w => ({ id: w.id, doc_no: w.doc_no }))
+        : null
     });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -875,11 +983,19 @@ router.post('/:id/payment/cancel', authenticate, async (req, res) => {
 
     // ยกเลิกใบ WHT ที่ link กับ PO นี้ (ถ้ามี)
     // — ไม่ลบทิ้ง เก็บประวัติไว้แต่เปลี่ยน status เป็น cancelled และ unlink จาก PO
-    if (po.withholding_id) {
+    // Cancel ใบ WHT ทั้งหมดที่ผูกกับ PO นี้
+    const cancelRes = await client.query(
+      `UPDATE withholding_tax
+       SET status = 'cancelled', updated_at = NOW()
+       WHERE source_po_id = $1 AND status != 'cancelled'`,
+      [id]
+    );
+    // legacy fallback: ถ้า source_po_id ไม่มี (row เก่าก่อน migration) — ใช้ withholding_id
+    if (po.withholding_id && cancelRes.rowCount === 0) {
       await client.query(
         `UPDATE withholding_tax
          SET status = 'cancelled', updated_at = NOW()
-         WHERE id = $1`,
+         WHERE id = $1 AND status != 'cancelled'`,
         [po.withholding_id]
       );
     }
@@ -921,7 +1037,7 @@ router.post('/:id/payment/cancel', authenticate, async (req, res) => {
     await client.query('COMMIT');
     res.json({
       success: true,
-      wht_cancelled: !!po.withholding_id,
+      wht_cancelled_count: cancelRes.rowCount + (po.withholding_id && cancelRes.rowCount === 0 ? 1 : 0),
       slips_deleted: slipsDeleted
     });
   } catch (err) {

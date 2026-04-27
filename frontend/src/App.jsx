@@ -2429,9 +2429,10 @@ const [items, setItems] = React.useState(() => {
         unit: it.unit || 'ชิ้น',
         description: it.description || '',
         wht_rate: it.wht_rate ?? 0,
+        income_type: it.income_type || '',
       }));
     }
-    return [{ product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น', description: '', wht_rate: 0 }];
+    return [{ product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น', description: '', wht_rate: 0, income_type: '' }];
   });
   const [staffList, setStaffList] = React.useState([]);
   const [err, setErr] = React.useState('');
@@ -2455,13 +2456,14 @@ const [items, setItems] = React.useState(() => {
               unit: it.unit || 'ชิ้น',
               description: it.description || '',
               wht_rate: it.wht_rate ?? 0,
+              income_type: it.income_type || '',
             })));
           }
         });
     }
   }, []);
 
-  const addItem = () => setItems([...items, { product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น', description: '', wht_rate: 0 }]);
+  const addItem = () => setItems([...items, { product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น', description: '', wht_rate: 0, income_type: '' }]);
   const removeItem = (i) => setItems(items.filter((_, idx) => idx !== i));
   const setItem = (i, field, val) => {
     const next = [...items]; next[i][field] = val;
@@ -2597,6 +2599,7 @@ const [items, setItems] = React.useState(() => {
                 <th style={{ ...styles.th, width: 80 }}>จำนวน</th>
                 <th style={{ ...styles.th, width: 110 }}>ราคา/หน่วย</th>
                 <th style={{ ...styles.th, width: 110, textAlign: 'right' }}>รวม</th>
+                <th style={{ ...styles.th, width: 110 }}>ประเภท</th>
                 <th style={{ ...styles.th, width: 90 }}>หัก %</th>
                 <th style={{ ...styles.th, width: 90, textAlign: 'right' }}>หักเงิน</th>
                 <th style={styles.th}></th>
@@ -2629,8 +2632,26 @@ const [items, setItems] = React.useState(() => {
                       {(Number(it.quantity || 0) * Number(it.unit_price || 0)).toLocaleString()}
                     </td>
                     <td style={styles.td}>
+                      <select style={{ ...styles.input, fontSize: 12 }}
+                        value={it.income_type || ''}
+                        disabled={!Number(it.wht_rate)}
+                        onChange={e => setItem(i, 'income_type', e.target.value)}>
+                        <option value="">— เลือก —</option>
+                        <option value="ม.3 เตรส">ม.3 เตรส</option>
+                        <option value="40(2)">40(2)</option>
+                        <option value="40(3)">40(3)</option>
+                        <option value="40(4)">40(4)</option>
+                        <option value="40(8)">40(8)</option>
+                      </select>
+                    </td>
+                    <td style={styles.td}>
                       <select style={styles.input} value={it.wht_rate ?? 0}
-                        onChange={e => setItem(i, 'wht_rate', Number(e.target.value))}>
+                        onChange={e => {
+                          const newRate = Number(e.target.value);
+                          setItem(i, 'wht_rate', newRate);
+                          // ถ้า rate กลายเป็น 0 → clear income_type
+                          if (newRate === 0) setItem(i, 'income_type', '');
+                        }}>
                         <option value={0}>0%</option>
                         <option value={1}>1%</option>
                         <option value={2}>2%</option>
@@ -3366,6 +3387,7 @@ function PODetailModal({ poId, onClose, onReceive, onEdit }) {
                 <th style={{ ...styles.th, textAlign: 'right' }}>จำนวน</th>
                 <th style={{ ...styles.th, textAlign: 'right' }}>ราคา/หน่วย</th>
                 <th style={{ ...styles.th, textAlign: 'right' }}>รวม</th>
+                <th style={{ ...styles.th }}>ประเภท</th>
                 <th style={{ ...styles.th, textAlign: 'right' }}>หัก %</th>
                 <th style={{ ...styles.th, textAlign: 'right' }}>หักเงิน</th>
               </tr>
@@ -3384,6 +3406,9 @@ function PODetailModal({ poId, onClose, onReceive, onEdit }) {
                   <td style={{ ...styles.td, textAlign: 'right' }}>{Number(it.quantity)}</td>
                   <td style={{ ...styles.td, textAlign: 'right' }}>{Number(it.unit_price).toLocaleString()}</td>
                   <td style={{ ...styles.td, textAlign: 'right' }}>{Number(it.total_price).toLocaleString()}</td>
+                  <td style={{ ...styles.td, fontSize: 12, color: it.income_type ? '#c41556' : '#9ca3af' }}>
+                    {it.income_type || '-'}
+                  </td>
                   <td style={{ ...styles.td, textAlign: 'right', color: Number(it.wht_rate) > 0 ? '#c41556' : '#9ca3af' }}>
                     {Number(it.wht_rate) > 0 ? `${Number(it.wht_rate)}%` : '-'}
                   </td>
@@ -3473,22 +3498,35 @@ function PODetailModal({ poId, onClose, onReceive, onEdit }) {
 
               <SlipList poId={po.id} />
 
-              {po.withholding_id && po.withholding_doc_no && (
-                <div style={{
-                  marginTop: 8, padding: '10px 14px',
-                  background: '#fff', border: '1px solid #fbcfe8', borderRadius: 6,
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                }}>
-                  <div>
-                    <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>ใบหัก ณ ที่จ่าย</div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: '#c41556', marginTop: 2 }}>
-                      📄 {po.withholding_doc_no}
-                    </div>
+              {Array.isArray(po.withholding_docs) && po.withholding_docs.length > 0 && (
+                <div style={{ gridColumn: 'span 3', marginTop: 8 }}>
+                  <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 600, marginBottom: 6 }}>
+                    ใบหัก ณ ที่จ่าย ({po.withholding_docs.length})
                   </div>
-                  <button style={{ ...styles.btn('primary'), padding: '6px 14px', fontSize: 13 }}
-                    onClick={() => window.open(`/api/withholding-tax/${po.withholding_id}/pdf?t=${localStorage.getItem('token')}`, '_blank')}>
-                    🖨️ ดู PDF
-                  </button>
+                  {po.withholding_docs.map(wht => (
+                    <div key={wht.id} style={{
+                      marginBottom: 6, padding: '10px 14px',
+                      background: '#fff', border: '1px solid #fbcfe8', borderRadius: 6,
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    }}>
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: '#c41556' }}>
+                          📄 {wht.doc_no}
+                          {wht.status === 'cancelled' && (
+                            <span style={{ ...styles.badge('red'), marginLeft: 8, fontSize: 11 }}>ยกเลิก</span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+                          {wht.income_type} · ยอดหัก {Number(wht.total_tax).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท
+                        </div>
+                      </div>
+                      <button style={{ ...styles.btn('primary'), padding: '6px 14px', fontSize: 13 }}
+                        disabled={wht.status === 'cancelled'}
+                        onClick={() => window.open(`/api/withholding/${wht.id}/pdf?t=${localStorage.getItem('token')}`, '_blank')}>
+                        🖨️ ดู PDF
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
