@@ -1568,6 +1568,11 @@ function ResetPasswordModal({ user, onClose, onDone }) {
   );
 }
 
+/* ========== WHT DOMAIN CONSTANTS (shared between WHT Page and PO Form) ========== */
+const PND_FORMS = ['ภ.ง.ด.1ก','ภ.ง.ด.1ก พิเศษ','ภ.ง.ด.2','ภ.ง.ด.3','ภ.ง.ด.2ก','ภ.ง.ด.3ก','ภ.ง.ด.53'];
+const INCOME_TYPES = ['40(1)','40(2)','40(3)','40(4)ก','40(4)ข','ม.3 เตรส','อื่นๆ'];
+const WHT_RATES = ['0','1','2','3','5','10','15'];
+
 /* ========== WITHHOLDING TAX (50 ทวิ) ========== */
 function WithholdingTaxPage() {
   const [list, setList] = useState([]);
@@ -1584,8 +1589,6 @@ function WithholdingTaxPage() {
     payer_tax_id: '0105556022070',
     payer_address: 'เลขที่ 80 อาคาร เค.เอ.เอ็น.เพลส ห้องเลขที่ 104 ชั้น 1 ซ.นราธิวาสราชนครินทร์ 8 แขวงทุ่งวัดดอน เขตสาทร กรุงเทพฯ 10120',
   };
-  const PND_FORMS = ['ภ.ง.ด.1ก','ภ.ง.ด.1ก พิเศษ','ภ.ง.ด.2','ภ.ง.ด.3','ภ.ง.ด.2ก','ภ.ง.ด.3ก','ภ.ง.ด.53'];
-  const INCOME_TYPES = ['40(1)','40(2)','40(3)','40(4)ก','40(4)ข','ม.3 เตรส','อื่นๆ'];
   const ST_LABEL = { draft:'ร่าง', issued:'ออกแล้ว', cancelled:'ยกเลิก' };
   const ST_COLOR = { draft:'default', issued:'green', cancelled:'red' };
 
@@ -2533,10 +2536,11 @@ const [items, setItems] = React.useState(() => {
         unit: it.unit || 'ชิ้น',
         description: it.description || '',
         wht_rate: it.wht_rate ?? 0,
+        pnd_form: it.pnd_form || '',
         income_type: it.income_type || '',
       }));
     }
-    return [{ product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น', description: '', wht_rate: 0, income_type: '' }];
+    return [{ product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น', description: '', wht_rate: 0, pnd_form: '', income_type: '' }];
   });
   const [staffList, setStaffList] = React.useState([]);
   const [err, setErr] = React.useState('');
@@ -2560,6 +2564,7 @@ const [items, setItems] = React.useState(() => {
               unit: it.unit || 'ชิ้น',
               description: it.description || '',
               wht_rate: it.wht_rate ?? 0,
+              pnd_form: it.pnd_form || '',
               income_type: it.income_type || '',
             })));
           }
@@ -2567,7 +2572,7 @@ const [items, setItems] = React.useState(() => {
     }
   }, []);
 
-  const addItem = () => setItems([...items, { product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น', description: '', wht_rate: 0, income_type: '' }]);
+  const addItem = () => setItems([...items, { product_id: '', quantity: 1, unit_price: 0, unit: 'ชิ้น', description: '', wht_rate: 0, pnd_form: '', income_type: '' }]);
   const removeItem = (i) => setItems(items.filter((_, idx) => idx !== i));
   const setItem = (i, field, val) => {
     const next = [...items]; next[i][field] = val;
@@ -2594,6 +2599,14 @@ const [items, setItems] = React.useState(() => {
     if (!form.supplier_id) { setErr('กรุณาเลือกผู้จำหน่าย'); return; }
     const validItems = items.filter(it => it.product_id && Number(it.quantity) > 0);
     if (validItems.length === 0) { setErr('ต้องมีรายการสินค้าอย่างน้อย 1'); return; }
+    // ถ้ามีรายการที่มีหัก ณ ที่จ่าย ต้องเลือกแบบ ภ.ง.ด. + ประเภทเงินได้ ครบทุกตัว
+    const whtItems = validItems.filter(it => Number(it.wht_rate) > 0);
+    if (whtItems.some(it => !it.pnd_form)) {
+      setErr('รายการที่มีหัก ณ ที่จ่ายต้องระบุแบบ ภ.ง.ด.ทุกตัว'); return;
+    }
+    if (whtItems.some(it => !it.income_type)) {
+      setErr('รายการที่มีหัก ณ ที่จ่ายต้องระบุประเภทเงินได้ทุกตัว'); return;
+    }
 
     const url = editPO ? `/api/purchase-orders/${editPO.id}` : '/api/purchase-orders';
     const method = editPO ? 'PUT' : 'POST';
@@ -2707,6 +2720,7 @@ const [items, setItems] = React.useState(() => {
                 <th style={{ ...styles.th, width: 80 }}>จำนวน</th>
                 <th style={{ ...styles.th, width: 110 }}>ราคา/หน่วย</th>
                 <th style={{ ...styles.th, width: 110, textAlign: 'right' }}>รวม</th>
+                <th style={{ ...styles.th, width: 110 }}>แบบ ภ.ง.ด.</th>
                 <th style={{ ...styles.th, width: 110 }}>ประเภท</th>
                 <th style={{ ...styles.th, width: 90 }}>หัก %</th>
                 <th style={{ ...styles.th, width: 90, textAlign: 'right' }}>หักเงิน</th>
@@ -2741,15 +2755,20 @@ const [items, setItems] = React.useState(() => {
                     </td>
                     <td style={styles.td}>
                       <select style={{ ...styles.input, fontSize: 12 }}
+                        value={it.pnd_form || ''}
+                        disabled={!Number(it.wht_rate)}
+                        onChange={e => setItem(i, 'pnd_form', e.target.value)}>
+                        <option value="">— เลือก —</option>
+                        {PND_FORMS.map(p => <option key={p} value={p}>{p}</option>)}
+                      </select>
+                    </td>
+                    <td style={styles.td}>
+                      <select style={{ ...styles.input, fontSize: 12 }}
                         value={it.income_type || ''}
                         disabled={!Number(it.wht_rate)}
                         onChange={e => setItem(i, 'income_type', e.target.value)}>
                         <option value="">— เลือก —</option>
-                        <option value="ม.3 เตรส">ม.3 เตรส</option>
-                        <option value="40(2)">40(2)</option>
-                        <option value="40(3)">40(3)</option>
-                        <option value="40(4)">40(4)</option>
-                        <option value="40(8)">40(8)</option>
+                        {INCOME_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                       </select>
                     </td>
                     <td style={styles.td}>
@@ -2757,8 +2776,11 @@ const [items, setItems] = React.useState(() => {
                         onChange={e => {
                           const newRate = Number(e.target.value);
                           setItem(i, 'wht_rate', newRate);
-                          // ถ้า rate กลายเป็น 0 → clear income_type
-                          if (newRate === 0) setItem(i, 'income_type', '');
+                          // ถ้า rate กลายเป็น 0 → clear pnd_form + income_type
+                          if (newRate === 0) {
+                            setItem(i, 'pnd_form', '');
+                            setItem(i, 'income_type', '');
+                          }
                         }}>
                         <option value={0}>0%</option>
                         <option value={1}>1%</option>
@@ -3522,6 +3544,7 @@ function PODetailInner({ poId, onClose, onReceive, onEdit }) {
                 <th style={{ ...styles.th, textAlign: 'right' }}>จำนวน</th>
                 <th style={{ ...styles.th, textAlign: 'right' }}>ราคา/หน่วย</th>
                 <th style={{ ...styles.th, textAlign: 'right' }}>รวม</th>
+                <th style={{ ...styles.th }}>แบบ ภ.ง.ด.</th>
                 <th style={{ ...styles.th }}>ประเภท</th>
                 <th style={{ ...styles.th, textAlign: 'right' }}>หัก %</th>
                 <th style={{ ...styles.th, textAlign: 'right' }}>หักเงิน</th>
@@ -3541,6 +3564,9 @@ function PODetailInner({ poId, onClose, onReceive, onEdit }) {
                   <td style={{ ...styles.td, textAlign: 'right' }}>{Number(it.quantity)}</td>
                   <td style={{ ...styles.td, textAlign: 'right' }}>{Number(it.unit_price).toLocaleString()}</td>
                   <td style={{ ...styles.td, textAlign: 'right' }}>{Number(it.total_price).toLocaleString()}</td>
+                  <td style={{ ...styles.td, fontSize: 12, color: it.pnd_form ? '#c41556' : '#9ca3af' }}>
+                    {it.pnd_form || '-'}
+                  </td>
                   <td style={{ ...styles.td, fontSize: 12, color: it.income_type ? '#c41556' : '#9ca3af' }}>
                     {it.income_type || '-'}
                   </td>

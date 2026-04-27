@@ -205,6 +205,13 @@ router.post('/', authenticate, async (req, res) => {
       };
     });
     // Validation: ทุก item ที่มี wht_rate > 0 ต้องเลือกประเภทเงินได้
+    const missingPndForm = itemsWithCalc.find(it => Number(it.wht_rate) > 0 && !it.pnd_form);
+    if (missingPndForm) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        error: `รายการที่มีหัก ณ ที่จ่ายต้องระบุแบบ ภ.ง.ด.ทุกตัว`
+      });
+    }
     const missingType = itemsWithCalc.find(it => Number(it.wht_rate) > 0 && !it.income_type);
     if (missingType) {
       await client.query('ROLLBACK');
@@ -237,12 +244,12 @@ router.post('/', authenticate, async (req, res) => {
 
     for (const it of itemsWithCalc) {
       await client.query(
-        `INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price, description, wht_rate, wht_amount, income_type)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        `INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price, description, wht_rate, wht_amount, pnd_form, income_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [po.id, it.product_id, it.unit || 'ชิ้น',
          it.quantity, it.unit_price, it.line_total,
          it.description || null,
-         it.wht_rate, it.wht_amount, it.income_type]
+         it.wht_rate, it.wht_amount, it.pnd_form || null, it.income_type]
       );
     }
 
@@ -548,6 +555,13 @@ router.put('/:id', authenticate, async (req, res) => {
       };
     });
     // Validation: ทุก item ที่มี wht_rate > 0 ต้องเลือกประเภทเงินได้
+    const missingPndForm = itemsWithCalc.find(it => Number(it.wht_rate) > 0 && !it.pnd_form);
+    if (missingPndForm) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        error: `รายการที่มีหัก ณ ที่จ่ายต้องระบุแบบ ภ.ง.ด.ทุกตัว`
+      });
+    }
     const missingType = itemsWithCalc.find(it => Number(it.wht_rate) > 0 && !it.income_type);
     if (missingType) {
       await client.query('ROLLBACK');
@@ -589,12 +603,12 @@ router.put('/:id', authenticate, async (req, res) => {
 
     for (const it of itemsWithCalc) {
       await client.query(
-        `INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price, description, wht_rate, wht_amount, income_type)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        `INSERT INTO po_items (po_id, product_id, unit, quantity, unit_price, total_price, description, wht_rate, wht_amount, pnd_form, income_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [id, it.product_id, it.unit || 'ชิ้น',
          it.quantity, it.unit_price, it.line_total,
          it.description || null,
-         it.wht_rate, it.wht_amount, it.income_type]
+         it.wht_rate, it.wht_amount, it.pnd_form || null, it.income_type]
       );
     }
 
@@ -748,20 +762,16 @@ async function createWHTForPO(client, poId, userId, opts = {}) {
     throw new Error('PO ไม่มียอดหัก ณ ที่จ่าย ไม่ต้องสร้างใบหัก ณ ที่จ่าย');
   }
 
-  // Group items ตาม income_type
+  // Group items ตาม (pnd_form + income_type) — compound key
+  // 1 group = 1 ใบ WHT (Phase B2: รองรับ ภ.ง.ด.หลายแบบใน PO เดียว)
   const groups = {};
   for (const it of itemsRes.rows) {
-    const type = it.income_type || 'ม.3 เตรส'; // fallback (ไม่ควรเกิดเพราะ validate ตอนสร้าง PO)
-    if (!groups[type]) groups[type] = [];
-    groups[type].push(it);
+    const pnd = it.pnd_form || 'ภ.ง.ด.3';   // fallback (ไม่ควรเกิดเพราะ validate)
+    const type = it.income_type || 'ม.3 เตรส';
+    const key = pnd + '|||' + type;
+    if (!groups[key]) groups[key] = { pnd_form: pnd, income_type: type, items: [] };
+    groups[key].items.push(it);
   }
-
-  // Helper: ตัดสินใจ pnd_form จาก income_type
-  // (ปกติ ม.3 เตรส = ภ.ง.ด.3 หรือ 53 ขึ้นกับ payee เป็นบุคคล/นิติบุคคล)
-  // ที่นี่ default ภ.ง.ด.3 — override ด้วย opts.pnd_form ถ้าต้องการ
-  const pickPndForm = (incomeType) => {
-    return opts.pnd_form || 'ภ.ง.ด.3';
-  };
 
   const issueDate = opts.issue_date || new Date();
   const withholdMethod = opts.withhold_method || 1;
@@ -784,8 +794,12 @@ async function createWHTForPO(client, poId, userId, opts = {}) {
 
   const createdWhts = [];
 
-  // Loop: สร้างใบ WHT 1 ใบต่อ income_type
-  for (const [incomeType, groupItems] of Object.entries(groups)) {
+  // Loop: สร้างใบ WHT 1 ใบต่อกลุ่ม (pnd_form + income_type)
+  for (const groupKey of Object.keys(groups)) {
+    const group = groups[groupKey];
+    const groupItems = group.items;
+    const incomeType = group.income_type;
+    const pndForm = group.pnd_form;
     const groupIncome = groupItems.reduce((s, it) => s + Number(it.total_price), 0);
     const groupTax = groupItems.reduce((s, it) => s + Number(it.wht_amount), 0);
 
@@ -798,8 +812,6 @@ async function createWHTForPO(client, poId, userId, opts = {}) {
       || po.job_name
       || groupItems.map(g => g.product_name).filter(Boolean).join(', ').slice(0, 200)
       || `ค่าจาก PO ${po.po_number}`;
-
-    const pndForm = pickPndForm(incomeType);
 
     const whtRes = await client.query(
       `INSERT INTO withholding_tax
