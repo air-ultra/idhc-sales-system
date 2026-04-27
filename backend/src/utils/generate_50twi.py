@@ -55,9 +55,8 @@ def hl(c, x1, x2, y):
     c.line(x1, y, x2, y)
     c.setDash(); c.setLineWidth(0.5)
 
-def generate(fname, d):
-    c = canvas.Canvas(fname, pagesize=A4)
-    c.setLineWidth(0.5)
+def render_page(c, d):
+    """วาด 1 หน้าใบ 50 ทวิ บน canvas ที่กำหนด (caller จัดการ canvas + showPage/save)"""
     LM=28; RM=W-28; BW=RM-LM
 
     # ═══ ฉบับที่ ═══
@@ -390,6 +389,78 @@ def generate(fname, d):
         c.drawString(mx+42, cy-46, f"..........{d['issue_date']}..........")
     c.setFont('S',7)
     c.drawString(mx+38, cy-56, '(วัน เดือน ปี ที่ออกหนังสือรับรองฯ)')
+
+
+def _num_to_thai_words(n):
+    """แปลงตัวเลขเป็นคำอ่านภาษาไทย (สำหรับ tax_words ของแต่ละหน้า)"""
+    if n is None: return ''
+    try: n = float(n)
+    except (TypeError, ValueError): return ''
+    if n <= 0: return 'ศูนย์บาทถ้วน'
+    digits = ['ศูนย์','หนึ่ง','สอง','สาม','สี่','ห้า','หก','เจ็ด','แปด','เก้า']
+    units = ['','สิบ','ร้อย','พัน','หมื่น','แสน','ล้าน']
+    def read_int(s):
+        s = str(int(s))
+        if len(s) > 7:
+            head = s[:-6]; tail = s[-6:]
+            return read_int(head) + 'ล้าน' + (read_int(tail) if int(tail) else '')
+        out = ''
+        L = len(s)
+        for i, ch in enumerate(s):
+            d = int(ch); pos = L - i - 1
+            if d == 0: continue
+            if pos == 0 and d == 1 and L > 1: out += 'เอ็ด'
+            elif pos == 1 and d == 2: out += 'ยี่' + units[1]
+            elif pos == 1 and d == 1: out += units[1]
+            else: out += digits[d] + units[pos]
+        return out or 'ศูนย์'
+    s = f"{n:.2f}"
+    int_part, dec_part = s.split('.')
+    txt = read_int(int_part) + 'บาท'
+    if int(dec_part) == 0:
+        txt += 'ถ้วน'
+    else:
+        txt += read_int(dec_part) + 'สตางค์'
+    return txt
+
+
+def generate(fname, d):
+    """
+    สร้าง PDF 50 ทวิ — ถ้ามี items หลาย row จะออกใบแยกหลายหน้า (1 หน้า / row)
+    แต่ละหน้าใช้ header เดียวกัน แต่ items สำหรับหน้านั้นมี 1 row
+    """
+    c = canvas.Canvas(fname, pagesize=A4)
+    c.setLineWidth(0.5)
+
+    items = d.get('items', [])
+    # ถ้าไม่มี items → ออก 1 หน้าตามข้อมูล header
+    if not items:
+        render_page(c, d)
+        c.save()
+        return
+
+    # ออก 1 หน้าต่อ row item
+    for idx, item in enumerate(items):
+        # สร้าง dict สำหรับหน้านั้น — ใช้ header ของ d + items แค่ 1 element
+        income = float(item.get('income_amount', 0) or 0)
+        tax = float(item.get('tax_amount', 0) or 0)
+        page_d = dict(d)  # shallow copy header
+        page_d['items'] = [item]
+        # override header pnd_form ด้วย item.pnd_form (ถ้ามี) เพื่อให้ checkbox ตรง
+        if item.get('pnd_form'):
+            page_d['pnd_form'] = item['pnd_form']
+        # override header income_type ด้วย item.income_type (ถ้ามี)
+        if item.get('income_type'):
+            page_d['income_type'] = item['income_type']
+        # คำนวณ total_income/tax และ tax_words ของหน้านั้น (เฉพาะ row นี้)
+        page_d['total_income'] = income
+        page_d['total_tax'] = tax
+        page_d['tax_words'] = _num_to_thai_words(tax)
+
+        render_page(c, page_d)
+        # ขึ้นหน้าใหม่ ยกเว้น row สุดท้าย
+        if idx < len(items) - 1:
+            c.showPage()
 
     c.save()
 

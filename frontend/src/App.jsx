@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { BrowserRouter, Routes, Route, useNavigate, useParams, useLocation, Navigate } from 'react-router-dom';
 import { login as apiLogin, getMe, getStaffList, getStaff, createStaff, updateStaff, deleteStaff, getDepartments, changePassword, getStaffContact, saveStaffContact, getStaffAddress, saveStaffAddress, getStaffEmployment, saveStaffEmployment, getStaffSalary, saveStaffSalary, getStaffHistory, getStaffNotes, createStaffNote, getStaffDocuments, uploadStaffDocument, deleteStaffDocument, getUsers, getRoles, createUser, updateUser, resetUserPassword, getRolePermissions, saveRolePermissions, getPayroll, generatePayroll, updatePayrollItem, approvePayroll, getStaffPayroll, getWithholdingCert } from './api';
 
 const authHeaders = () => ({ Authorization: 'Bearer ' + localStorage.getItem('token') });
@@ -10,6 +11,10 @@ const styles = {
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; color: #333; }
     button { cursor: pointer; border: none; outline: none; }
     input, select, textarea { outline: none; font-family: inherit; }
+    /* Hide spinner on number inputs */
+    input[type=number]::-webkit-outer-spin-button,
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; }
   `,
   loginPage: { display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', background: 'linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%)' },
   loginCard: { background: '#fff', borderRadius: 12, padding: '40px 36px', width: 380, boxShadow: '0 20px 60px rgba(0,0,0,0.15)' },
@@ -114,15 +119,29 @@ const menuItems = [
   { key: 'settings', icon: '⚙️', label: 'ตั้งค่า' },
 ];
 function Sidebar({ active, onNavigate, user, onLogout }) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const isOnPurchaseRoute = location.pathname.startsWith('/purchase');
   return (
     <div style={styles.sidebar}>
       <div style={styles.sidebarLogo}><div style={styles.sidebarLogoText}>Sales System</div><div style={styles.sidebarLogoSub}>Management Platform</div></div>
       <nav style={styles.sidebarNav}>
-        {menuItems.map(item => (
-          <button key={item.key} onClick={() => onNavigate(item.key)} style={{ ...styles.sidebarItem, ...(active === item.key ? styles.sidebarItemActive : {}) }}>
-            <span>{item.icon}</span><span>{item.label}</span>
-          </button>
-        ))}
+        {menuItems.map(item => {
+          const isActive = item.key === 'purchase' ? isOnPurchaseRoute : (active === item.key && !isOnPurchaseRoute);
+          const handleClick = () => {
+            if (item.key === 'purchase') {
+              navigate('/purchase');
+            } else {
+              if (isOnPurchaseRoute) navigate('/');
+              onNavigate(item.key);
+            }
+          };
+          return (
+            <button key={item.key} onClick={handleClick} style={{ ...styles.sidebarItem, ...(isActive ? styles.sidebarItemActive : {}) }}>
+              <span>{item.icon}</span><span>{item.label}</span>
+            </button>
+          );
+        })}
       </nav>
       <div style={styles.sidebarUser}>
         <div style={styles.sidebarUserName}>{user?.first_name_th} {user?.last_name_th}</div>
@@ -924,11 +943,22 @@ function StaffDetailPage({ staffId, onBack, onRefresh }) {
 
 /* ========== MAIN APP ========== */
 export default function App() {
+  return (
+    <BrowserRouter>
+      <AppInner />
+    </BrowserRouter>
+  );
+}
+
+function AppInner() {
   const [user, setUser] = useState(null);
   const [page, setPage] = useState('dashboard');
   const [staffList, setStaffList] = useState([]);
   const [selectedStaffId, setSelectedStaffId] = useState(null);
   const [authChecked, setAuthChecked] = useState(false);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const isOnPurchaseRoute = location.pathname.startsWith('/purchase');
 
   useEffect(() => { const s = document.createElement('style'); s.textContent = styles.global; document.head.appendChild(s); return () => s.remove(); }, []);
 
@@ -945,7 +975,7 @@ export default function App() {
 
   useEffect(() => { if (user) loadStaff(); }, [user, loadStaff]);
 
-  const handleLogout = () => { localStorage.removeItem('token'); setUser(null); setPage('dashboard'); setSelectedStaffId(null); };
+  const handleLogout = () => { localStorage.removeItem('token'); setUser(null); setPage('dashboard'); setSelectedStaffId(null); navigate('/'); };
 
   if (!authChecked) return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', color: '#888' }}>กำลังโหลด...</div>;
   if (!user) return <LoginPage onLogin={setUser} />;
@@ -954,15 +984,24 @@ export default function App() {
     <div style={styles.layout}>
       <Sidebar active={page} onNavigate={(p) => { setPage(p); setSelectedStaffId(null); }} user={user} onLogout={handleLogout} />
       <main style={styles.main}>
-        {page === 'dashboard' && <DashboardPage staffList={staffList} />}
-        {page === 'staff' && !selectedStaffId && <StaffListPage staffList={staffList} onSelect={setSelectedStaffId} onRefresh={loadStaff} />}
-        {page === 'staff' && selectedStaffId && <StaffDetailPage staffId={selectedStaffId} onBack={() => setSelectedStaffId(null)} onRefresh={loadStaff} />}
-        {page === 'payroll' && <PayrollPage />}
-        {page === 'stock' && <StockPage />}
-        {page === 'purchase' && <PurchaseOrderPage />}
-        {page === 'withholding' && <WithholdingTaxPage />}
-        {page === 'users' && <UserManagementPage staffList={staffList} />}
-        {page === 'settings' && <SettingsPage />}
+        <Routes>
+          <Route path="/purchase" element={<PurchaseOrderPage />} />
+          <Route path="/purchase/new" element={<POFormPage />} />
+          <Route path="/purchase/:id" element={<PODetailPage />} />
+          <Route path="/purchase/:id/edit" element={<POFormPage />} />
+          <Route path="*" element={
+            <>
+              {page === 'dashboard' && <DashboardPage staffList={staffList} />}
+              {page === 'staff' && !selectedStaffId && <StaffListPage staffList={staffList} onSelect={setSelectedStaffId} onRefresh={loadStaff} />}
+              {page === 'staff' && selectedStaffId && <StaffDetailPage staffId={selectedStaffId} onBack={() => setSelectedStaffId(null)} onRefresh={loadStaff} />}
+              {page === 'payroll' && <PayrollPage />}
+              {page === 'stock' && <StockPage />}
+              {page === 'withholding' && <WithholdingTaxPage />}
+              {page === 'users' && <UserManagementPage staffList={staffList} />}
+              {page === 'settings' && <SettingsPage />}
+            </>
+          } />
+        </Routes>
       </main>
     </div>
   );
@@ -1556,7 +1595,7 @@ function WithholdingTaxPage() {
       tax_year: new Date().getFullYear(), payee_name:'', payee_tax_id:'', payee_address:'',
       pnd_form:'ภ.ง.ด.3', pnd_seq:1, income_type:'ม.3 เตรส', income_desc:'',
       total_income:'', total_tax:'', fund_gpf:0, fund_sso:0, fund_pvf:0, withhold_method:1,
-	items:[{ pay_date:'', description:'', income_amount:'', tax_amount:'', pnd_form:'ภ.ง.ด.3', income_type:'ม.3 เตรส' }] };
+	items:[{ pay_date:'', description:'', income_amount:'', tax_rate:'', tax_amount:'', pnd_form:'ภ.ง.ด.3', income_type:'ม.3 เตรส' }] };
   }
 
   const whtApi = async (url, opts={}) => {
@@ -1581,8 +1620,15 @@ function WithholdingTaxPage() {
   const handleSubmit = async () => {
     try {
       setError('');
-      const p = { ...form, total_income:parseFloat(form.total_income)||0, total_tax:parseFloat(form.total_tax)||0,
-        items: form.items.map(i=>({...i, income_amount:parseFloat(i.income_amount)||0, tax_amount:parseFloat(i.tax_amount)||0 })) };
+      // คำนวณยอดรวมจาก items อัตโนมัติ (ไม่ใช้ค่าที่กรอกเอง)
+      const itemsClean = form.items.map(i => ({
+        ...i,
+        income_amount: parseFloat(i.income_amount) || 0,
+        tax_amount: parseFloat(i.tax_amount) || 0,
+      }));
+      const sumIncome = itemsClean.reduce((s, i) => s + i.income_amount, 0);
+      const sumTax = itemsClean.reduce((s, i) => s + i.tax_amount, 0);
+      const p = { ...form, total_income: sumIncome, total_tax: sumTax, items: itemsClean };
       if (editId) await whtApi('/api/withholding/'+editId, { method:'PATCH', body:JSON.stringify(p) });
       else await whtApi('/api/withholding', { method:'POST', body:JSON.stringify(p) });
       setShowForm(false); setEditId(null); setForm(getEmptyWhtForm()); fetchList();
@@ -1591,12 +1637,46 @@ function WithholdingTaxPage() {
 
   const handleIssue = async (id) => { if (!confirm('ออกเอกสารจริง?')) return; try { await whtApi('/api/withholding/'+id+'/issue',{method:'POST'}); fetchList(); } catch(e){ setError(e.message); } };
   const handleDelete = async (id) => { if (!confirm('ลบเอกสาร?')) return; try { await whtApi('/api/withholding/'+id,{method:'DELETE'}); fetchList(); } catch(e){ setError(e.message); } };
-  const handleEdit = async (id) => { try { const d = await whtApi('/api/withholding/'+id); setForm({...d, total_income:d.total_income||'', total_tax:d.total_tax||'', items:d.items.length?d.items:[{pay_date:'',description:'',income_amount:'',tax_amount:''}]}); setEditId(id); setShowForm(true); } catch(e){ setError(e.message); } };
+  const handleEdit = async (id) => {
+    try {
+      const d = await whtApi('/api/withholding/'+id);
+      const allowedRates = ['0','1','2','3','5','10','15'];
+      const itemsWithRate = (d.items||[]).map(i => {
+        const inc = parseFloat(i.income_amount)||0;
+        const tax = parseFloat(i.tax_amount)||0;
+        // reverse calc rate; ถ้าไม่ตรงกับ dropdown ปล่อย '' ให้ผู้ใช้เลือกใหม่
+        let tax_rate = '';
+        if (inc > 0 && tax > 0) {
+          const r = +(tax/inc*100).toFixed(2);
+          // exact match (ตัวเลข) หรือ near-match (±0.01) เผื่อ rounding
+          const matched = allowedRates.find(ar => Math.abs(parseFloat(ar) - r) < 0.01);
+          if (matched) tax_rate = matched;
+        }
+        return { ...i, tax_rate };
+      });
+      const finalItems = itemsWithRate.length
+        ? itemsWithRate
+        : [{pay_date:'',description:'',income_amount:'',tax_rate:'',tax_amount:'',pnd_form:'ภ.ง.ด.3',income_type:'ม.3 เตรส'}];
+      setForm({...d, total_income:d.total_income||'', total_tax:d.total_tax||'', items:finalItems});
+      setEditId(id);
+      setShowForm(true);
+    } catch(e){ setError(e.message); }
+  };
   const openPdf = async (id) => { try { const token = localStorage.getItem('token'); const res = await fetch('/api/withholding/'+id+'/pdf', { headers: { Authorization: 'Bearer '+token }}); const blob = await res.blob(); const url = URL.createObjectURL(blob); window.open(url,'_blank'); } catch(e){ setError(e.message); } };
 
-  const addItem = () => setForm(f=>({...f, items:[...f.items,{pay_date:'',description:'',income_amount:'',tax_amount:'',pnd_form:'ภ.ง.ด.3',income_type:'ม.3 เตรส'}]}));
+  const addItem = () => setForm(f=>({...f, items:[...f.items,{pay_date:'',description:'',income_amount:'',tax_rate:'',tax_amount:'',pnd_form:'ภ.ง.ด.3',income_type:'ม.3 เตรส'}]}));
   const removeItem = (idx) => setForm(f=>({...f, items:f.items.filter((_,i)=>i!==idx)}));
-  const updateItem = (idx,k,v) => setForm(f=>({...f, items:f.items.map((it,i)=>i===idx?{...it,[k]:v}:it)}));
+  const updateItem = (idx,k,v) => setForm(f=>({...f, items:f.items.map((it,i)=>{
+    if (i!==idx) return it;
+    const updated = {...it, [k]:v};
+    // auto-calc tax_amount เมื่อเปลี่ยน rate หรือ income_amount
+    if (k==='tax_rate' || k==='income_amount') {
+      const inc = parseFloat(updated.income_amount)||0;
+      const rate = parseFloat(updated.tax_rate)||0;
+      updated.tax_amount = (inc>0 && rate>0) ? +(inc*rate/100).toFixed(2) : '';
+    }
+    return updated;
+  })}));
 
   return (
     <div>
@@ -1688,7 +1768,8 @@ function WithholdingTaxPage() {
                       <div style={{width:110}}><label style={{...styles.label,fontSize:11}}>วันที่จ่าย</label><input style={styles.input} value={item.pay_date} onChange={e=>updateItem(idx,'pay_date',e.target.value)} placeholder="เม.ย. 69" /></div>
                       <div style={{flex:1}}><label style={{...styles.label,fontSize:11}}>รายละเอียด</label><input style={styles.input} value={item.description} onChange={e=>updateItem(idx,'description',e.target.value)} /></div>
                       <div style={{width:120}}><label style={{...styles.label,fontSize:11}}>จำนวนเงิน</label><input type="number" style={styles.input} value={item.income_amount} onChange={e=>updateItem(idx,'income_amount',e.target.value)} /></div>
-                      <div style={{width:120}}><label style={{...styles.label,fontSize:11}}>ภาษี</label><input type="number" style={styles.input} value={item.tax_amount} onChange={e=>updateItem(idx,'tax_amount',e.target.value)} /></div>
+                      <div style={{width:90}}><label style={{...styles.label,fontSize:11}}>หัก %</label><select style={styles.input} value={item.tax_rate||''} onChange={e=>updateItem(idx,'tax_rate',e.target.value)}><option value="">-</option><option value="0">0%</option><option value="1">1%</option><option value="2">2%</option><option value="3">3%</option><option value="5">5%</option><option value="10">10%</option><option value="15">15%</option></select></div>
+                      <div style={{width:120}}><label style={{...styles.label,fontSize:11}}>ภาษี</label><input type="number" style={{...styles.input, background:'#f3f4f6', cursor:'not-allowed'}} value={item.tax_amount} readOnly title="คำนวณอัตโนมัติจาก จำนวนเงิน × หัก%" /></div>
                     </div>
                   </div>
                 ))}
@@ -1696,8 +1777,22 @@ function WithholdingTaxPage() {
 
 
               <div style={{...styles.formGrid,marginTop:12}}>
-                <div><label style={styles.label}>รวมเงินได้</label><input type="number" style={styles.input} value={form.total_income} onChange={e=>setForm(f=>({...f,total_income:e.target.value}))} /></div>
-                <div><label style={styles.label}>รวมภาษี</label><input type="number" style={styles.input} value={form.total_tax} onChange={e=>setForm(f=>({...f,total_tax:e.target.value}))} /></div>
+                <div>
+                  <label style={styles.label}>รวมเงินได้</label>
+                  <input type="number"
+                    style={{...styles.input, background:'#f3f4f6', cursor:'not-allowed'}}
+                    value={(form.items||[]).reduce((s,i)=>s+(parseFloat(i.income_amount)||0),0).toFixed(2)}
+                    readOnly
+                    title="คำนวณอัตโนมัติจากรายการจ่ายเงิน" />
+                </div>
+                <div>
+                  <label style={styles.label}>รวมภาษี</label>
+                  <input type="number"
+                    style={{...styles.input, background:'#f3f4f6', cursor:'not-allowed'}}
+                    value={(form.items||[]).reduce((s,i)=>s+(parseFloat(i.tax_amount)||0),0).toFixed(2)}
+                    readOnly
+                    title="คำนวณอัตโนมัติจากรายการจ่ายเงิน" />
+                </div>
               </div>
             </div>
             <div style={styles.modalFooter}>
@@ -2294,10 +2389,8 @@ function CategoriesTab({ categories, onReload }) {
 ============================================================ */
 function PurchaseOrderPage() {
   const [orders, setOrders] = React.useState([]);
-  const [showForm, setShowForm] = React.useState(false);
-  const [editPO, setEditPO] = React.useState(null);
-  const [detailPO, setDetailPO] = React.useState(null);
   const [receivePO, setReceivePO] = React.useState(null);
+  const navigate = useNavigate();
 
   const load = () => {
     fetch('/api/purchase-orders', { headers: authHeaders() })
@@ -2317,7 +2410,7 @@ function PurchaseOrderPage() {
     <div>
       <div style={styles.pageHeader}>
         <div style={styles.pageTitle}>ใบสั่งซื้อ (Purchase Order)</div>
-        <button style={styles.btn('primary')} onClick={() => setShowForm(true)}>+ สร้างใบสั่งซื้อ</button>
+        <button style={styles.btn('primary')} onClick={() => navigate('/purchase/new')}>+ สร้างใบสั่งซื้อ</button>
       </div>
 
       <div style={styles.card}>
@@ -2338,7 +2431,7 @@ function PurchaseOrderPage() {
               <tr key={o.id} style={styles.trHover}>
                 <td style={styles.td}>
                   <a style={{ color: '#2563eb', textDecoration: 'underline', cursor: 'pointer' }}
-                     onClick={() => setDetailPO(o)}>{o.po_number}</a>
+                     onClick={() => navigate(`/purchase/${o.id}`)}>{o.po_number}</a>
                 </td>
                 <td style={styles.td}>{new Date(o.po_date).toLocaleDateString('th-TH')}</td>
                 <td style={styles.td}>{o.supplier_name}</td>
@@ -2348,10 +2441,10 @@ function PurchaseOrderPage() {
                 <td style={styles.td}>
 <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                   <button style={{ ...styles.btn(), padding: '6px 12px', fontSize: 12 }}
-                    onClick={() => setDetailPO(o)}>ดู</button>
+                    onClick={() => navigate(`/purchase/${o.id}`)}>ดู</button>
                   {o.status === 'draft' && (
                     <button style={{ ...styles.btn(), padding: '6px 12px', fontSize: 12 }}
-                      onClick={() => setEditPO(o)}>แก้ไข</button>
+                      onClick={() => navigate(`/purchase/${o.id}/edit`)}>แก้ไข</button>
                   )}
                   {o.status === 'draft' && (
                     <button style={{ ...styles.btn('primary'), padding: '6px 12px', fontSize: 12 }}
@@ -2379,20 +2472,6 @@ function PurchaseOrderPage() {
         </table>
       </div>
 
-      {showForm && (
-        <POFormModal onClose={() => setShowForm(false)} onSaved={() => { setShowForm(false); load(); }} />
-      )}
-      {editPO && (
-        <POFormModal editPO={editPO}
-          onClose={() => setEditPO(null)}
-          onSaved={() => { setEditPO(null); load(); }} />
-      )}
-      {detailPO && (
-        <PODetailModal poId={detailPO.id}
-          onClose={() => { setDetailPO(null); load(); }}
-          onReceive={(po) => { setDetailPO(null); setReceivePO(po); }}
-          onEdit={(po) => { setDetailPO(null); setEditPO(po); }} />
-      )}
       {receivePO && (
         <ReceivePOModal poId={receivePO.id}
           onClose={() => setReceivePO(null)}
@@ -2403,7 +2482,32 @@ function PurchaseOrderPage() {
 }
 
 /* ========== PO FORM MODAL ========== */
-function POFormModal({ editPO, onClose, onSaved }) {
+/* ========== PO FORM PAGE (สร้าง/แก้ไข PO) ========== */
+function POFormPage() {
+  const navigate = useNavigate();
+  const { id: editIdParam } = useParams();
+  const editId = editIdParam ? parseInt(editIdParam) : null;
+  const [editPO, setEditPO] = React.useState(null);
+  const [loading, setLoading] = React.useState(!!editId);
+
+  // โหลด PO เดิมถ้าเป็น edit mode
+  React.useEffect(() => {
+    if (!editId) return;
+    fetch(`/api/purchase-orders/${editId}`, { headers: authHeaders() })
+      .then(r => r.json())
+      .then(data => { setEditPO(data); setLoading(false); })
+      .catch(err => { setLoading(false); alert('โหลด PO ไม่สำเร็จ: ' + err.message); navigate('/purchase'); });
+  }, [editId]);
+
+  if (loading) {
+    return <div style={{ padding: 60, textAlign: 'center', color: '#888' }}>กำลังโหลด...</div>;
+  }
+  if (editId && !editPO) return null;
+
+  return <POFormInner editPO={editPO} onCancel={() => navigate(-1)} onSaved={(savedId) => navigate(`/purchase/${savedId}`)} />;
+}
+
+function POFormInner({ editPO, onCancel, onSaved }) {
   const [suppliers, setSuppliers] = React.useState([]);
   const [products, setProducts] = React.useState([]);
 const [form, setForm] = React.useState(() => editPO ? {
@@ -2499,17 +2603,21 @@ const [items, setItems] = React.useState(() => {
     });
     const data = await res.json();
     if (!res.ok) { setErr(data.error || 'error'); return; }
-    onSaved();
+    onSaved(data.id || (editPO && editPO.id));
   };
 
   return (
-    <div style={styles.overlay}>
-      <div style={{ ...styles.modal, width: 820 }} onClick={e => e.stopPropagation()}>
-        <div style={styles.modalHeader}>
-          <div style={styles.modalTitle}>{editPO ? `แก้ไขใบสั่งซื้อ: ${editPO.po_number}` : 'สร้างใบสั่งซื้อ'}</div>
-          <button style={{ ...styles.btn(), padding: '4px 10px' }} onClick={onClose}>✕</button>
+    <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 20px 80px' }}>
+      <div style={{ ...styles.pageHeader, marginBottom: 16 }}>
+        <div>
+          <button onClick={onCancel} style={{ ...styles.btn(), padding: '6px 12px', fontSize: 13, marginBottom: 8 }}>
+            ← กลับ
+          </button>
+          <div style={styles.pageTitle}>{editPO ? `แก้ไขใบสั่งซื้อ: ${editPO.po_number}` : 'สร้างใบสั่งซื้อ'}</div>
         </div>
-        <div style={styles.modalBody}>
+      </div>
+      <div style={{ ...styles.card, padding: 24 }}>
+        <div>
           {err && <div style={styles.error}>{err}</div>}
 
           <div style={styles.formGrid}>
@@ -2701,8 +2809,8 @@ const [items, setItems] = React.useState(() => {
             )}
           </div>
         </div>
-        <div style={styles.modalFooter}>
-          <button style={styles.btn()} onClick={onClose}>ยกเลิก</button>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 24, paddingTop: 16, borderTop: '1px solid #e5e7eb' }}>
+          <button style={styles.btn()} onClick={onCancel}>ยกเลิก</button>
           <button style={styles.btn('primary')} onClick={save}>บันทึก</button>
         </div>
       </div>
@@ -3216,7 +3324,29 @@ function PayModal({ po, onClose, onSuccess }) {
   );
 }
 
-function PODetailModal({ poId, onClose, onReceive, onEdit }) {
+/* ========== PO DETAIL PAGE ========== */
+function PODetailPage() {
+  const navigate = useNavigate();
+  const { id } = useParams();
+  const poId = parseInt(id);
+  const [receivePO, setReceivePO] = React.useState(null);
+
+  if (!poId) return <Navigate to="/purchase" />;
+
+  return <>
+    <PODetailInner poId={poId}
+      onClose={() => navigate('/purchase')}
+      onReceive={(po) => setReceivePO(po)}
+      onEdit={(po) => navigate(`/purchase/${po.id}/edit`)} />
+    {receivePO && (
+      <ReceivePOModal poId={receivePO.id}
+        onClose={() => setReceivePO(null)}
+        onDone={() => { setReceivePO(null); navigate(`/purchase/${poId}`); /* refresh */ }} />
+    )}
+  </>;
+}
+
+function PODetailInner({ poId, onClose, onReceive, onEdit }) {
   const [po, setPo] = React.useState(null);
 
   const load = () => {
@@ -3298,11 +3428,16 @@ function PODetailModal({ poId, onClose, onReceive, onEdit }) {
   };
 
   return (<>
-    <div style={styles.overlay} onClick={onClose}>
-      <div style={{ ...styles.modal, width: 880 }} onClick={e => e.stopPropagation()}>
-        <div style={{ ...styles.modalHeader, flexDirection: 'column', alignItems: 'stretch', gap: 12 }}>
+    <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 20px 80px' }}>
+      <div style={{ marginBottom: 12 }}>
+        <button onClick={onClose} style={{ ...styles.btn(), padding: '6px 12px', fontSize: 13 }}>
+          ← กลับ
+        </button>
+      </div>
+      <div style={{ ...styles.card, padding: 0 }}>
+        <div style={{ padding: 24, borderBottom: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-            <div style={styles.modalTitle}>PO: {po.po_number}</div>
+            <div style={{ ...styles.pageTitle, fontSize: 20 }}>PO: {po.po_number}</div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               {po.payment_status === 'paid' ? (
                 <>
@@ -3376,7 +3511,7 @@ function PODetailModal({ poId, onClose, onReceive, onEdit }) {
             </div>
           </div>
         </div>
-        <div style={styles.modalBody}>
+        <div style={{ padding: 24 }}>
           <table style={styles.table}>
             <thead>
               <tr>
@@ -3615,7 +3750,7 @@ function PODetailModal({ poId, onClose, onReceive, onEdit }) {
           )}
         </div>
         </div>
-        <div style={styles.modalFooter}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '16px 24px', borderTop: '1px solid #e5e7eb' }}>
           {po.status === 'draft' && (
             <button style={styles.btn('danger')} onClick={cancel}>ยกเลิก PO</button>
           )}
