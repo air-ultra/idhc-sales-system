@@ -251,6 +251,12 @@ function EditableTab({ staffId, fetchFn, saveFn, fields, title }) {
 
   useEffect(() => { load(); }, [staffId]);
 
+  // เก็บ payroll history สำหรับคำนวณภาษีตามจริง (history + projection)
+  const [payrollHist, setPayrollHist] = useState([]);
+  useEffect(() => {
+    getStaffPayroll(staffId).then(r => setPayrollHist(r.data || [])).catch(() => {});
+  }, [staffId]);
+
   const load = async () => {
     setLoading(true);
     try {
@@ -455,6 +461,12 @@ function SalaryTab({ staffId }) {
 
   useEffect(() => { load(); }, [staffId]);
 
+  // เก็บ payroll history สำหรับคำนวณภาษีตามจริง (history + projection)
+  const [payrollHist, setPayrollHist] = useState([]);
+  useEffect(() => {
+    getStaffPayroll(staffId).then(r => setPayrollHist(r.data || [])).catch(() => {});
+  }, [staffId]);
+
   const load = async () => {
     setLoading(true);
     try { const res = await getStaffSalary(staffId); setData(res.data); setForm(res.data || {}); }
@@ -519,8 +531,8 @@ function SalaryTab({ staffId }) {
   const summaryRow = { display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 14 };
   const hrStyle = { border: 'none', borderTop: '1px dashed #ddd', margin: '8px 0' };
 
-  // View for saved data
-  const viewTax = data ? calcTaxSummary(data.salary, data.social_security, data.social_security_eligible) : null;
+  // View for saved data — ใช้ history + projection ให้ตรงกับ wht ที่ save จริง
+  const viewTax = data ? calcTaxSummaryWithHistory(data.salary, data.social_security, data.social_security_eligible, payrollHist) : null;
 
   return (
     <div style={{ padding: 24 }}>
@@ -555,7 +567,15 @@ function SalaryTab({ staffId }) {
               </div>
               {showTaxDetail && (
                 <div style={{ marginTop: 12 }}>
-                  <div style={summaryRow}><span>รายได้ทั้งปี ({fmtNum(data?.salary)} x 12)</span><span style={{ fontWeight: 600 }}>{fmtB(viewTax.yearlyIncome)} บาท</span></div>
+                  <div style={summaryRow}>
+                    <span>
+                      รายได้ทั้งปี
+                      {viewTax.monthsPast > 0
+                        ? ` (${viewTax.monthsPast} เดือนที่ผ่านมา + ${viewTax.remainingMonths} × ${fmtNum(data?.salary)})`
+                        : ` (${fmtNum(data?.salary)} × 12)`}
+                    </span>
+                    <span style={{ fontWeight: 600 }}>{fmtB(viewTax.yearlyIncome)} บาท</span>
+                  </div>
                   <div style={summaryRow}><span>หักค่าใช้จ่าย (50% ไม่เกิน 100,000)</span><span style={{ color: '#dc2626' }}>-{fmtB(viewTax.expense)} บาท</span></div>
                   <div style={summaryRow}><span>หักค่าลดหย่อนส่วนตัว</span><span style={{ color: '#dc2626' }}>-{fmtB(viewTax.personal)} บาท</span></div>
                   {viewTax.ssYearly > 0 && <div style={summaryRow}><span>หักประกันสังคม ({fmtNum(data?.social_security)} x 12)</span><span style={{ color: '#dc2626' }}>-{fmtB(viewTax.ssYearly)} บาท</span></div>}

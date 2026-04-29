@@ -4,6 +4,62 @@ const { authenticate, requirePermission } = require('../middleware/auth');
 
 const router = express.Router();
 
+/* ============================================================
+ * Tax Calculation Helpers (Phase 2.10.1 — 2026-04-29)
+ * ============================================================ */
+
+const TAX_BRACKETS = [
+  { min: 0,       max: 150000,    rate: 0 },
+  { min: 150000,  max: 300000,    rate: 0.05 },
+  { min: 300000,  max: 500000,    rate: 0.10 },
+  { min: 500000,  max: 750000,    rate: 0.15 },
+  { min: 750000,  max: 1000000,   rate: 0.20 },
+  { min: 1000000, max: 2000000,   rate: 0.25 },
+  { min: 2000000, max: 5000000,   rate: 0.30 },
+  { min: 5000000, max: Infinity,  rate: 0.35 },
+];
+
+function calcProgressiveTax(netIncome) {
+  let tax = 0;
+  for (const b of TAX_BRACKETS) {
+    if (netIncome <= b.min) break;
+    const taxable = Math.min(netIncome, b.max) - b.min;
+    tax += taxable * b.rate;
+  }
+  return Math.round(tax);
+}
+
+/**
+ * คำนวณ wht รายเดือนสำหรับ staff คนหนึ่งในเดือน/ปีที่กำหนด
+ * past = SUM(salary) จาก payroll WHERE year=Y AND month<>M
+ * projected = currentSalary × (12 - monthsPast)
+ * yearlyIncome = past + projected → progressive → /12
+ */
+async function calcWhtForGenerate(staffId, year, month, currentSalary, ssMonthly, ssEligible) {
+  try {
+    const past = await query(
+      `SELECT salary FROM payroll WHERE staff_id=$1 AND year=$2 AND month<>$3`,
+      [staffId, year, month]
+    );
+    const pastSalary = past.rows.reduce((sum, r) => sum + (parseFloat(r.salary) || 0), 0);
+    const monthsPast = past.rows.length;
+    const remainingMonths = Math.max(12 - monthsPast, 0);
+    const projected = (parseFloat(currentSalary) || 0) * remainingMonths;
+
+    const yearlyIncome = pastSalary + projected;
+    const expense = Math.min(yearlyIncome * 0.5, 100000);
+    const personal = 60000;
+    const ssYearly = ssEligible ? (parseFloat(ssMonthly) || 0) * 12 : 0;
+    const netIncome = Math.max(yearlyIncome - expense - personal - ssYearly, 0);
+    const yearlyTax = calcProgressiveTax(netIncome);
+    return { wht: Math.round(yearlyTax / 12), monthsPast, remainingMonths, yearlyIncome, yearlyTax };
+  } catch (e) {
+    console.error('calcWhtForGenerate error:', e);
+    return null;
+  }
+}
+
+
 // GET /api/payroll?year=&month=
 router.get('/', authenticate, async (req, res) => {
   try {
@@ -41,10 +97,10 @@ router.post('/generate', authenticate, async (req, res) => {
       return res.status(400).json({ error: `รายการเงินเดือน ${month}/${year} มีอยู่แล้ว` });
     }
 
-    // Get all active staff with salary info
+    // Get all active staff with salary info (รวม auto_calc_tax สำหรับ recalc)
     const staffResult = await query(
       `SELECT s.id as staff_id, ss.salary, ss.social_security, ss.withholding_tax,
-              ss.social_security_eligible
+              ss.social_security_eligible, ss.auto_calc_tax
        FROM staff s
        LEFT JOIN staff_salary ss ON ss.staff_id = s.id
        WHERE s.status = 'active'`
@@ -58,7 +114,16 @@ router.post('/generate', authenticate, async (req, res) => {
     for (const staff of staffResult.rows) {
       const salary = parseFloat(staff.salary) || 0;
       const ss = parseFloat(staff.social_security) || 0;
-      const tax = parseFloat(staff.withholding_tax) || 0;
+      let tax = parseFloat(staff.withholding_tax) || 0;
+
+      // ถ้า auto_calc_tax=true → recalc wht จาก payroll history + projection
+      if (staff.auto_calc_tax === true) {
+        const calc = await calcWhtForGenerate(
+          staff.staff_id, year, month, salary, ss, staff.social_security_eligible === true
+        );
+        if (calc) tax = calc.wht;
+      }
+
       const netPay = salary - ss - tax;
 
       await query(
@@ -244,7 +309,16 @@ router.post('/add-single', authenticate, async (req, res) => {
     const ss = staffSalary.rows[0] || {};
     const salary = parseFloat(ss.salary) || 0;
     const socialSecurity = parseFloat(ss.social_security) || 0;
-    const tax = parseFloat(ss.withholding_tax) || 0;
+    let tax = parseFloat(ss.withholding_tax) || 0;
+
+    // ถ้า auto_calc_tax=true → recalc wht
+    if (ss.auto_calc_tax === true) {
+      const calc = await calcWhtForGenerate(
+        staff_id, year, month, salary, socialSecurity, ss.social_security_eligible === true
+      );
+      if (calc) tax = calc.wht;
+    }
+
     const netPay = salary - socialSecurity - tax;
 
     const result = await query(
