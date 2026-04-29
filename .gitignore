@@ -15,3 +15,4 @@ backend/src/fonts/THSarabunNew*.ttf
 *.bak~*
 *.bak.before-*
 migration_*.sql
+*.bak.*
