@@ -396,6 +396,54 @@ function calcTaxSummary(salary, ssMonthly, ssEligible) {
   return { yearlyIncome, expense, personal, ssYearly, netIncome, yearlyTax, monthlyTax, details };
 }
 
+/**
+ * คำนวณภาษีโดยใช้ payroll history ของเดือนที่ผ่านมา (ปีปัจจุบัน)
+ * รวม salary + bonus + overtime + other_income ของแต่ละเดือนที่ผ่านมา
+ * + projection ของเดือนที่เหลือ (current salary × เดือนที่เหลือ)
+ *
+ * @param {number} currentSalary - เงินเดือนปัจจุบันที่กำลังจะ save
+ * @param {number} ssMonthly     - ปกส.รายเดือน (จากเงินเดือนใหม่)
+ * @param {boolean} ssEligible   - มีปกส.มั้ย
+ * @param {Array}  payrollHist   - payroll history (จาก getStaffPayroll)
+ * @returns object เหมือน calcTaxSummary + ฟิลด์ pastIncome, projectedIncome, monthsPast
+ */
+function calcTaxSummaryWithHistory(currentSalary, ssMonthly, ssEligible, payrollHist) {
+  const monthSalary = parseFloat(currentSalary) || 0;
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1; // 1-12
+
+  // กรอง payroll ของปีปัจจุบันทั้งหมด (ไม่ filter เดือน)
+  // Logic: เดือนที่ทำ payroll แล้วยึดตาม payroll, เดือนที่ยังไม่ทำใช้ projection
+  const past = (payrollHist || []).filter(r =>
+    parseInt(r.year) === currentYear
+  );
+
+  // รวมเงินได้จริงของเดือนที่ผ่านมา (salary + bonus + ot + other_income)
+  const pastIncome = past.reduce((sum, r) =>
+    sum + (parseFloat(r.salary) || 0)
+        + (parseFloat(r.bonus) || 0)
+        + (parseFloat(r.overtime) || 0)
+        + (parseFloat(r.other_income) || 0), 0);
+
+  const monthsPast = past.length;
+  const remainingMonths = Math.max(12 - monthsPast, 0);
+  const projectedIncome = monthSalary * remainingMonths;
+
+  const yearlyIncome = pastIncome + projectedIncome;
+  const expense = Math.min(yearlyIncome * 0.5, 100000);
+  const personal = 60000;
+  const ssYearly = ssEligible ? (parseFloat(ssMonthly) || 0) * 12 : 0;
+  const netIncome = Math.max(yearlyIncome - expense - personal - ssYearly, 0);
+  const { tax: yearlyTax, details } = calcProgressiveTax(netIncome);
+  const monthlyTax = Math.round(yearlyTax / 12);
+
+  return {
+    yearlyIncome, expense, personal, ssYearly, netIncome, yearlyTax, monthlyTax, details,
+    pastIncome, projectedIncome, monthsPast, remainingMonths
+  };
+}
+
 function SalaryTab({ staffId }) {
   const [data, setData] = useState(null);
   const [form, setForm] = useState({});
@@ -426,10 +474,29 @@ function SalaryTab({ staffId }) {
     try {
       const isEligible = form.social_security_eligible === true || form.social_security_eligible === 'true';
       const ssAmount = isEligible ? calcSS(form.salary, form.ss_rate, form.ss_max_salary) : 0;
-      const taxInfo = calcTaxSummary(form.salary, ssAmount, isEligible);
       const autoCalc = form.auto_calc_tax === true || form.auto_calc_tax === 'true';
-      const wht = autoCalc ? taxInfo.monthlyTax : (parseFloat(form.withholding_tax) || 0);
-      const payload = { ...form, social_security_eligible: isEligible, social_security: ssAmount, withholding_tax: wht, tax_condition: autoCalc ? 'คำนวณอัตโนมัติ (ขั้นบันได)' : form.tax_condition };
+
+      // คำนวณภาษีโดยใช้ payroll history (เฉพาะ auto_calc_tax = true)
+      let wht = 0;
+      let taxCondition = form.tax_condition;
+      if (autoCalc) {
+        let payrollHist = [];
+        try {
+          const histRes = await getStaffPayroll(staffId);
+          payrollHist = histRes.data || [];
+        } catch (e) {
+          console.warn('โหลด payroll history ไม่สำเร็จ — fallback ใช้สูตรเดิม', e);
+        }
+        const taxInfo = calcTaxSummaryWithHistory(form.salary, ssAmount, isEligible, payrollHist);
+        wht = taxInfo.monthlyTax;
+        taxCondition = taxInfo.monthsPast > 0
+          ? `คำนวณอัตโนมัติ (ผ่านมา ${taxInfo.monthsPast} เดือน + เหลือ ${taxInfo.remainingMonths} เดือน)`
+          : 'คำนวณอัตโนมัติ (ขั้นบันได)';
+      } else {
+        wht = parseFloat(form.withholding_tax) || 0;
+      }
+
+      const payload = { ...form, social_security_eligible: isEligible, social_security: ssAmount, withholding_tax: wht, tax_condition: taxCondition };
       const res = await saveStaffSalary(staffId, payload);
       setData(res.data); setForm(res.data); setEditing(false);
       setMsg('บันทึกข้อมูลเงินเดือนสำเร็จ');
