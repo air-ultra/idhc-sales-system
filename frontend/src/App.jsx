@@ -251,12 +251,6 @@ function EditableTab({ staffId, fetchFn, saveFn, fields, title }) {
 
   useEffect(() => { load(); }, [staffId]);
 
-  // เก็บ payroll history สำหรับคำนวณภาษีตามจริง (history + projection)
-  const [payrollHist, setPayrollHist] = useState([]);
-  useEffect(() => {
-    getStaffPayroll(staffId).then(r => setPayrollHist(r.data || [])).catch(() => {});
-  }, [staffId]);
-
   const load = async () => {
     setLoading(true);
     try {
@@ -461,12 +455,6 @@ function SalaryTab({ staffId }) {
 
   useEffect(() => { load(); }, [staffId]);
 
-  // เก็บ payroll history สำหรับคำนวณภาษีตามจริง (history + projection)
-  const [payrollHist, setPayrollHist] = useState([]);
-  useEffect(() => {
-    getStaffPayroll(staffId).then(r => setPayrollHist(r.data || [])).catch(() => {});
-  }, [staffId]);
-
   const load = async () => {
     setLoading(true);
     try { const res = await getStaffSalary(staffId); setData(res.data); setForm(res.data || {}); }
@@ -531,8 +519,8 @@ function SalaryTab({ staffId }) {
   const summaryRow = { display: 'flex', justifyContent: 'space-between', padding: '6px 0', fontSize: 14 };
   const hrStyle = { border: 'none', borderTop: '1px dashed #ddd', margin: '8px 0' };
 
-  // View for saved data — ใช้ history + projection ให้ตรงกับ wht ที่ save จริง
-  const viewTax = data ? calcTaxSummaryWithHistory(data.salary, data.social_security, data.social_security_eligible, payrollHist) : null;
+  // View for saved data
+  const viewTax = data ? calcTaxSummary(data.salary, data.social_security, data.social_security_eligible) : null;
 
   return (
     <div style={{ padding: 24 }}>
@@ -567,15 +555,7 @@ function SalaryTab({ staffId }) {
               </div>
               {showTaxDetail && (
                 <div style={{ marginTop: 12 }}>
-                  <div style={summaryRow}>
-                    <span>
-                      รายได้ทั้งปี
-                      {viewTax.monthsPast > 0
-                        ? ` (${viewTax.monthsPast} เดือนที่ผ่านมา + ${viewTax.remainingMonths} × ${fmtNum(data?.salary)})`
-                        : ` (${fmtNum(data?.salary)} × 12)`}
-                    </span>
-                    <span style={{ fontWeight: 600 }}>{fmtB(viewTax.yearlyIncome)} บาท</span>
-                  </div>
+                  <div style={summaryRow}><span>รายได้ทั้งปี ({fmtNum(data?.salary)} x 12)</span><span style={{ fontWeight: 600 }}>{fmtB(viewTax.yearlyIncome)} บาท</span></div>
                   <div style={summaryRow}><span>หักค่าใช้จ่าย (50% ไม่เกิน 100,000)</span><span style={{ color: '#dc2626' }}>-{fmtB(viewTax.expense)} บาท</span></div>
                   <div style={summaryRow}><span>หักค่าลดหย่อนส่วนตัว</span><span style={{ color: '#dc2626' }}>-{fmtB(viewTax.personal)} บาท</span></div>
                   {viewTax.ssYearly > 0 && <div style={summaryRow}><span>หักประกันสังคม ({fmtNum(data?.social_security)} x 12)</span><span style={{ color: '#dc2626' }}>-{fmtB(viewTax.ssYearly)} บาท</span></div>}
@@ -2001,7 +1981,7 @@ function StockPage() {
       .then(r => r.json()).then(d => setSuppliers(Array.isArray(d) ? d : []));
   };
   const loadCategories = () => {
-    fetch('/api/product-categories', { headers: authHeaders() })
+    fetch('/api/product-categories?flat=1', { headers: authHeaders() })
       .then(r => r.json()).then(d => setCategories(Array.isArray(d) ? d : []));
   };
 
@@ -2629,6 +2609,11 @@ function PurchaseOrderPage() {
     return <span style={styles.badge()}>{s}</span>;
   };
 
+  const paymentBadge = (s) => {
+    if (s === 'paid') return <span style={styles.badge('green')}>✓ ชำระแล้ว</span>;
+    return <span style={styles.badge()}>ยังไม่ชำระ</span>;
+  };
+
   return (
     <div>
       <div style={styles.pageHeader}>
@@ -2645,6 +2630,8 @@ function PurchaseOrderPage() {
               <th style={styles.th}>ผู้จำหน่าย</th>
               <th style={styles.th}>จำนวนรายการ</th>
               <th style={{ ...styles.th, textAlign: 'right' }}>ยอดรวม</th>
+              <th style={styles.th}>ครบกำหนด</th>
+              <th style={styles.th}>การชำระเงิน</th>
               <th style={styles.th}>สถานะ</th>
               <th style={styles.th}></th>
             </tr>
@@ -2660,6 +2647,8 @@ function PurchaseOrderPage() {
                 <td style={styles.td}>{o.supplier_name}</td>
                 <td style={styles.td}>{o.item_count}</td>
                 <td style={{ ...styles.td, textAlign: 'right' }}>{Number(o.grand_total).toLocaleString()}</td>
+                <td style={styles.td}>{o.due_date ? new Date(o.due_date).toLocaleDateString('th-TH') : '-'}</td>
+                <td style={styles.td}>{paymentBadge(o.payment_status)}</td>
                 <td style={styles.td}>{statusBadge(o.status)}</td>
                 <td style={styles.td}>
 <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
@@ -2689,9 +2678,21 @@ function PurchaseOrderPage() {
               </tr>
             ))}
             {orders.length === 0 && (
-              <tr><td style={{ ...styles.td, textAlign: 'center', color: '#888', padding: 30 }} colSpan="7">ไม่มีข้อมูล</td></tr>
+              <tr><td style={{ ...styles.td, textAlign: 'center', color: '#888', padding: 30 }} colSpan="9">ไม่มีข้อมูล</td></tr>
             )}
           </tbody>
+          {orders.length > 0 && (
+            <tfoot>
+              <tr style={{ background: '#fafbfc', borderTop: '2px solid #f0f2f5' }}>
+                <td style={{ ...styles.td, fontWeight: 700, color: '#1e3a5f' }} colSpan="3">รวมทั้งหมด</td>
+                <td style={{ ...styles.td, fontWeight: 700, color: '#1e3a5f' }}>{orders.length} ใบ</td>
+                <td style={{ ...styles.td, textAlign: 'right', fontWeight: 700, color: '#1e3a5f' }}>
+                  {orders.reduce((sum, o) => sum + Number(o.grand_total || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </td>
+                <td style={styles.td} colSpan="4"></td>
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
 
