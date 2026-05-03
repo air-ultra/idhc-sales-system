@@ -14,5 +14,11 @@ backend/src/fonts/THSarabunNew*.ttf
 *.current
 *.bak~*
 *.bak.before-*
+
+# Throwaway migration scripts at repo root (one-time use, not tracked)
 migration_*.sql
+# BUT track migrations in db/migrations/ (committed for reproducibility)
+!db/migrations/
+!db/migrations/*.sql
+
 *.bak.*

@@ -56,6 +56,7 @@ routes/
   purchaseOrders.js      # ⚠️ camelCase, มี 18+ endpoints รวม billing/payment/WHT/PDF/docs/slip/multi-WHT
   product-categories.js  # ⚠️ มี dash
   companyBankAccounts.js # ⚠️ camelCase — Bank accounts ของบริษัท (Phase 2.8)
+  customers.js           # Customer master + contacts + documents (Phase 3.1)
 utils/
   generate_50twi.py      # PDF ใบหัก ณ ที่จ่าย — multi-page (1 row = 1 page) Phase B1
   generate_po_pdf.py     # PDF ใบสั่งซื้อ (IDEA HOUSE template)
@@ -525,6 +526,50 @@ created_at, updated_at
 ```
 
 **`staff_documents`** (pattern reference — ใช้แบบเดียวกันกับ po_documents)
+
+**`customers`** (ใหม่ Phase 3.1 — 2026-05-03)
+```
+customer_code VARCHAR(30) UNIQUE  # auto: CUS-0001 (sequence customer_code_seq)
+name          VARCHAR(255) NOT NULL
+tax_id        VARCHAR(20)         # UNIQUE (partial WHERE NOT NULL/empty)
+branch        VARCHAR(50)         # 'สำนักงานใหญ่' | '00001' | ...
+address       TEXT
+postal_code   VARCHAR(10)
+phone, email, notes
+is_active     BOOLEAN DEFAULT TRUE
+created_by    (→ users, ON DELETE SET NULL)
+created_at, updated_at
+# Indexes: idx_customers_name, idx_customers_is_active, uq_customers_tax_id (partial)
+```
+
+**`customer_contacts`** (ใหม่ Phase 3.1 — 2026-05-03)
+```
+customer_id   (→ customers, ON DELETE CASCADE)
+name          VARCHAR(200) NOT NULL  # ผู้ประสานงาน
+position      VARCHAR(100)
+phone, email, line_id
+is_primary    BOOLEAN DEFAULT FALSE  # contact หลัก (1 ต่อ customer)
+display_order INTEGER DEFAULT 0
+notes
+# Indexes: idx_customer_contacts_customer_id
+#         uq_customer_contacts_one_primary UNIQUE (customer_id) WHERE is_primary = TRUE
+# Auto rules (backend):
+#   - contact แรกของ customer → is_primary = TRUE auto
+#   - ลบ primary → ตั้ง contact ที่เหลือตัวแรกเป็น primary auto
+```
+
+**`customer_documents`** (ใหม่ Phase 3.1.1 — 2026-05-03)
+```
+customer_id   (→ customers, ON DELETE CASCADE)
+file_name VARCHAR(255)        # ชื่อไฟล์ดั้งเดิม
+file_path VARCHAR(500)        # ชื่อไฟล์บน disk (timestamp_basename.ext)
+mime_type, file_size, notes
+uploaded_by   (→ users, ON DELETE SET NULL)
+uploaded_at
+# ไฟล์จริงเก็บที่ /app/uploads/customers/{customer_id}/
+# Limit: 20MB/ไฟล์, .pdf/.jpg/.png/.doc/.docx/.xls/.xlsx
+# ไม่มี doc_type — ใช้ notes อธิบายแทน
+```
 
 ---
 
@@ -1345,6 +1390,45 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 5. **Token via `?t=` query** สำหรับ `<img src>` — endpoint ต้อง authenticate แต่ HTTP `<img>` ไม่ส่ง Authorization header (ใช้ pattern เดิมระบบ — middleware/auth.js รองรับทั้ง 2 แบบ)
 
 
+### Phase 3.1 — Customer Master + Contacts + Documents (2026-05-03)
+
+#### 🏢 Customer Master
+- ✅ DB: `customers` (CUS-0001 sequence) + `customer_contacts` (1 customer = many)
+- ✅ Partial unique indexes:
+  - `uq_customers_tax_id` — tax_id UNIQUE เฉพาะที่ไม่ใช่ null/empty
+  - `uq_customer_contacts_one_primary` — 1 customer = 1 primary contact
+- ✅ Backend `customers.js`: 14 endpoints (5 customer + 4 contact + 4 documents + 1 PATCH alias)
+- ✅ Auto-set `is_primary=TRUE` ตอน contact แรก / auto-reassign ตอนลบ primary
+- ✅ Application-level tax_id duplicate check (message ชัดเจน — ไม่ใช่ DB error generic)
+- ✅ Frontend: เมนู "🏢 ลูกค้า" ใน sidebar
+- ✅ Frontend: CustomersPage + CustomerFormModal + CustomerDetailModal + CustomerContactModal
+- ⚠️ Modal-on-modal — CustomerContactModal ใช้ `zIndex: 10001` เพราะเปิดทับ DetailModal
+
+#### 📎 Customer Documents (Phase 3.1.1)
+- ✅ DB: `customer_documents` (FK CASCADE)
+- ✅ Backend: 4 endpoints (list/upload/download/delete) + multer config
+- ✅ Multer: max 20 MB, .pdf/.jpg/.png/.doc/.docx/.xls/.xlsx
+- ✅ Storage: `/app/uploads/customers/{customer_id}/` (volume `uploads_data` เดิม)
+- ✅ Frontend `CustomerDocumentsSection` component:
+  - Pending file preview (yellow box) ให้กรอก notes ก่อนยืนยันแนบ
+  - Table + icon ตาม mime (🖼️/📄/📝/📊/📎)
+  - Click ชื่อไฟล์ = preview/download (ใช้ `?t=` token query)
+- ✅ ไม่มี doc_type — ใช้ field `notes` อธิบายแทน
+
+#### 📁 Repository Hygiene
+- ✅ แก้ `.gitignore` — ปลด track ของ `db/migrations/*.sql`
+  - เดิม: `migration_*.sql` กิน pattern ทุก path → migrations หายจาก repo
+  - ใหม่: ignore root + `!db/migrations/*.sql` (negation)
+- ✅ Commit migrations เก่าเข้า repo: `migration_phase_2.14.sql`, `migration_customer_documents.sql`, `migration_phase_3.1.sql`
+
+#### ⚠️ บทเรียนสำคัญ Phase 3.1
+1. **ระวัง gitignore pattern กว้าง** — `migration_*.sql` ที่ตั้งไว้ Phase 2.10 → กิน Phase 2.14+ ลงไปด้วย ตรวจไม่เจอเพราะ `git status` clean ตลอด → migrations หายจาก repo
+2. **Modal-on-modal ต้อง z-index สูงกว่า** — ใช้ `zIndex: 10001` ใน overlay style override
+3. **Smoke test API ก่อน Frontend** — Phase 3.1 step 2 (curl test 5 case) ทำให้ step 3 (Frontend) ลื่นไม่ต้อง debug backend
+4. **PATCH alias สำหรับ PUT** — ตามบทเรียน 10.11 — กัน method mismatch
+5. **App-level duplicate check ดีกว่า DB error** — เช่น tax_id → message อ้างอิง record ที่ซ้ำได้
+
+
 ### Backup & Tooling (2026-04-25)
 - ✅ **`backup.sh`** — full backup script (DB dump + source tar + junk cleanup + .gitignore update)
 - ✅ Backup files อยู่ที่ `~/sales-system-backups/`
@@ -1376,9 +1460,12 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 
 ---
 
-**Last Updated:** 2026-05-03 (Phase 2.14 — brand + product images + description UX)
+**Last Updated:** 2026-05-03 (Phase 3.1 — Customer Master + Contacts + Documents)
 
 **Latest Commits:**
+- `<NEW_HASH>` — docs: update CHANGELOG + PROJECT_CONTEXT for Phase 3.1 + add migrations
+- `95da4c7` — feat(customer): customer master + contacts + documents (Phase 3.1)
+- `e40583f` — docs: update CHANGELOG + PROJECT_CONTEXT for Phase 2.14
 - `9f29733` — feat(stock): brand + product images + description UX (Phase 2.14)
 - `f3ac8bb` — feat(po): list columns + footer total + fix category subcategory display
 - `f9a04b9` — fix(payroll): backend recalc wht ตอน generate + sync ตารางสรุป UI
@@ -1386,16 +1473,12 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 - `ab98f88` — feat(stock): restore subcategory UI + lesson learned
 - `0f27262` — feat(payroll): documents export + unapprove + WeasyPrint migration
 - `c088ccf` — docs: update PROJECT_CONTEXT.md for Phase 2.7-B2
-- `c6f8a39` — feat: PO Form แบบ ภ.ง.ด. + Multi-WHT per (ภ.ง.ด. × ประเภท) (Phase B2)
-- `eb143f8` — feat: PO modal→page + WHT rate dropdown + multi-page PDF (Phase A + B1)
-- `323d1f5` — feat: per-item income_type + multi-WHT per PO (Phase 2.9)
-- `90f7cfd` — feat: pay modal + bank accounts + slip upload (Phase 2.7-2.8)
-- `174af95` — Phase 1 final: WHT 50twi with per-item pnd_form and income_type
 
 **Pending commit:**
-- docs: update CHANGELOG.md + PROJECT_CONTEXT.md for Phase 2.14 (commit นี้)
+- (none — ล่าสุด Phase 3.1 + docs commit เรียบร้อย)
 
 **Pending features (รอทำต่อ):**
-- ⏳ Filter + pagination หน้า PO list (server-side, ?page=&limit=)
-- ⏳ Hybrid form: อัพรูปได้ตอนเพิ่ม/แก้สินค้า (ตอนนี้อยู่แค่ Detail) — เก็บไว้พิจารณาภายหลัง
-- ⏳ Lifetime feature ที่ค้างอยู่ (ดู section "Pending รอทำต่อ" ด้านบน)
+- ⏳ Phase 3.2: Quotation module (next!)
+- ⏳ Filter + pagination หน้า PO list (server-side)
+- ⏳ Hybrid form: อัพรูปได้ตอนเพิ่ม/แก้สินค้า — เก็บไว้พิจารณาภายหลัง
+- ⏳ Phase 3 ต่อ: Sales Order, Service Contract, Invoice, Payment

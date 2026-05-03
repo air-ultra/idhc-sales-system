@@ -1,3 +1,4 @@
+[ paste เนื้อหา CHANGELOG_phase_3.1_entry.md ทั้งหมดที่นี่ ]
 ## [Phase 2.14 — Brand + Product Images + Detail UX] — 2026-05-03
 
 ### Added
