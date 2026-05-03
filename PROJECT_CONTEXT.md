@@ -1463,7 +1463,8 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 **Last Updated:** 2026-05-03 (Phase 3.1 — Customer Master + Contacts + Documents)
 
 **Latest Commits:**
-- `<NEW_HASH>` — docs: update CHANGELOG + PROJECT_CONTEXT for Phase 3.1 + add migrations
+- `ff172f8` — feat(phase-3.2A): Quotation CRUD + invoice-style Detail page
+- `be66460` — docs: update CHANGELOG + PROJECT_CONTEXT for Phase 3.1 + add migrations
 - `95da4c7` — feat(customer): customer master + contacts + documents (Phase 3.1)
 - `e40583f` — docs: update CHANGELOG + PROJECT_CONTEXT for Phase 2.14
 - `9f29733` — feat(stock): brand + product images + description UX (Phase 2.14)
@@ -1475,10 +1476,10 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 - `c088ccf` — docs: update PROJECT_CONTEXT.md for Phase 2.7-B2
 
 **Pending commit:**
-- (none — ล่าสุด Phase 3.1 + docs commit เรียบร้อย)
+- (none — ล่าสุด Phase 3.2A + docs commit เรียบร้อย)
 
 **Pending features (รอทำต่อ):**
-- ⏳ Phase 3.2: Quotation module (next!)
+- ⏳ Phase 3.2B: PDF Export (WeasyPrint pattern, next!)
 - ⏳ Filter + pagination หน้า PO list (server-side)
 - ⏳ Hybrid form: อัพรูปได้ตอนเพิ่ม/แก้สินค้า — เก็บไว้พิจารณาภายหลัง
 - ⏳ Phase 3 ต่อ: Sales Order, Service Contract, Invoice, Payment
