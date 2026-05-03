@@ -1,8 +1,40 @@
 // backend/src/routes/products.js
 const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const { query } = require('../config/database');
 const { authenticate } = require('../middleware/auth');
 const router = express.Router();
+
+// ───── Image upload config (Phase 2.14) ─────
+const MAX_IMAGES_PER_PRODUCT = 5;
+const imageUploadDir = '/app/uploads/products';
+if (!fs.existsSync(imageUploadDir)) fs.mkdirSync(imageUploadDir, { recursive: true });
+
+const imageStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const productDir = path.join(imageUploadDir, String(req.params.id));
+    if (!fs.existsSync(productDir)) fs.mkdirSync(productDir, { recursive: true });
+    cb(null, productDir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const base = path.basename(file.originalname, ext)
+      .replace(/[^a-zA-Z0-9\u0E00-\u0E7F\-_ ]/g, '').substring(0, 40);
+    cb(null, `${Date.now()}_${base}${ext}`);
+  }
+});
+
+const imageUpload = multer({
+  storage: imageStorage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB ต่อรูป
+  fileFilter: (req, file, cb) => {
+    const allowed = ['.jpg', '.jpeg', '.png', '.webp'];
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, allowed.includes(ext));
+  }
+});
 
 /* ========== LIST ==========
    avg_cost: สำหรับสินค้า stock ใช้ AVG(cost_price) ของ serial available
@@ -25,7 +57,7 @@ router.get('/', authenticate, async (req, res) => {
     if (search) {
       params.push(`%${search}%`);
       const idx = params.length;
-      conditions.push(`(p.product_code ILIKE $${idx} OR p.name ILIKE $${idx} OR p.model ILIKE $${idx})`);
+      conditions.push(`(p.product_code ILIKE $${idx} OR p.name ILIKE $${idx} OR p.model ILIKE $${idx} OR p.brand ILIKE $${idx})`);
     }
 
     const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -190,7 +222,7 @@ async function validateCategoryIsLeaf(category_id) {
 router.post('/', authenticate, async (req, res) => {
   try {
     const {
-      name, model, description, category_id, product_type,
+      name, model, brand, description, category_id, product_type,
       default_unit, cost_price, sell_price
     } = req.body;
 
@@ -209,11 +241,11 @@ router.post('/', authenticate, async (req, res) => {
 
     const result = await query(
       `INSERT INTO products
-         (product_code, name, model, description, category_id, product_type, default_unit,
+         (product_code, name, model, brand, description, category_id, product_type, default_unit,
           cost_price, sell_price, stock_qty, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, true)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, true)
        RETURNING *`,
-      [product_code, name, model || null, description || null, category_id || null,
+      [product_code, name, model || null, brand || null, description || null, category_id || null,
        product_type || 'stock', default_unit || 'ชิ้น',
        cost_price || 0, sell_price || 0]
     );
@@ -229,7 +261,7 @@ router.put('/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
     const {
-      name, model, description, category_id, product_type,
+      name, model, brand, description, category_id, product_type,
       default_unit, cost_price, sell_price
     } = req.body;
 
@@ -240,16 +272,17 @@ router.put('/:id', authenticate, async (req, res) => {
       `UPDATE products SET
          name = COALESCE($1, name),
          model = $2,
-         description = $3,
-         category_id = $4,
-         product_type = COALESCE($5, product_type),
-         default_unit = COALESCE($6, default_unit),
-         cost_price = COALESCE($7, cost_price),
-         sell_price = COALESCE($8, sell_price),
+         brand = $3,
+         description = $4,
+         category_id = $5,
+         product_type = COALESCE($6, product_type),
+         default_unit = COALESCE($7, default_unit),
+         cost_price = COALESCE($8, cost_price),
+         sell_price = COALESCE($9, sell_price),
          updated_at = NOW()
-       WHERE id = $9
+       WHERE id = $10
        RETURNING *`,
-      [name, model || null, description || null, category_id || null,
+      [name, model || null, brand || null, description || null, category_id || null,
        product_type, default_unit, cost_price, sell_price, id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
@@ -298,6 +331,166 @@ router.post('/:id/adjust-stock', authenticate, async (req, res) => {
     res.json(result.rows[0]);
   } catch (err) {
     console.error('POST /products/:id/adjust-stock error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ========================================
+   IMAGES (Phase 2.14)
+   ======================================== */
+
+/* ----- LIST images (เรียงตาม cover ก่อน, แล้ว display_order, แล้ว id) ----- */
+router.get('/:id/images', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await query(
+      `SELECT id, product_id, file_name, file_path, mime_type, file_size,
+              is_cover, display_order, uploaded_at
+       FROM product_images
+       WHERE product_id = $1
+       ORDER BY is_cover DESC, display_order ASC, id ASC`,
+      [id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error('GET /products/:id/images error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ----- UPLOAD image ----- */
+router.post('/:id/images', authenticate, imageUpload.single('file'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!req.file) return res.status(400).json({ error: 'ไม่มีไฟล์แนบ' });
+
+    // ตรวจ product มีจริง
+    const prod = await query(`SELECT id FROM products WHERE id = $1`, [id]);
+    if (prod.rows.length === 0) {
+      // ลบไฟล์ที่อัพมาทิ้ง
+      try { fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+      return res.status(404).json({ error: 'ไม่พบสินค้า' });
+    }
+
+    // ตรวจจำนวนรูปไม่เกิน 5
+    const count = await query(
+      `SELECT COUNT(*)::int AS c FROM product_images WHERE product_id = $1`, [id]
+    );
+    if (count.rows[0].c >= MAX_IMAGES_PER_PRODUCT) {
+      try { fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+      return res.status(400).json({
+        error: `อัพรูปได้ไม่เกิน ${MAX_IMAGES_PER_PRODUCT} รูปต่อสินค้า`
+      });
+    }
+
+    // รูปแรก → เป็น cover อัตโนมัติ
+    const isFirst = (count.rows[0].c === 0);
+
+    const result = await query(
+      `INSERT INTO product_images
+         (product_id, file_name, file_path, mime_type, file_size,
+          is_cover, display_order, uploaded_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [id, req.file.originalname, req.file.filename,
+       req.file.mimetype, req.file.size,
+       isFirst, count.rows[0].c, req.user.id]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error('POST /products/:id/images error:', err);
+    if (req.file) {
+      try { fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ----- DOWNLOAD/VIEW image ----- */
+router.get('/:id/images/:imgId/file', authenticate, async (req, res) => {
+  try {
+    const { id, imgId } = req.params;
+    const result = await query(
+      `SELECT * FROM product_images WHERE id = $1 AND product_id = $2`,
+      [imgId, id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'ไม่พบรูป' });
+
+    const img = result.rows[0];
+    const filePath = path.join(imageUploadDir, String(id), img.file_path);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'ไฟล์หายจาก server' });
+    }
+
+    res.setHeader('Content-Type', img.mime_type || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    fs.createReadStream(filePath).pipe(res);
+  } catch (err) {
+    console.error('GET image file error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ----- SET COVER (toggle ★) ----- */
+router.put('/:id/images/:imgId/cover', authenticate, async (req, res) => {
+  try {
+    const { id, imgId } = req.params;
+    // ตรวจรูปอยู่จริง
+    const check = await query(
+      `SELECT id FROM product_images WHERE id = $1 AND product_id = $2`,
+      [imgId, id]
+    );
+    if (check.rows.length === 0) return res.status(404).json({ error: 'ไม่พบรูป' });
+
+    // เคลียร์ cover เก่าก่อน (เพราะ partial unique index บังคับ 1 cover/product)
+    await query(
+      `UPDATE product_images SET is_cover = FALSE WHERE product_id = $1`, [id]
+    );
+    await query(
+      `UPDATE product_images SET is_cover = TRUE WHERE id = $1`, [imgId]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error('PUT cover error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ----- DELETE image ----- */
+router.delete('/:id/images/:imgId', authenticate, async (req, res) => {
+  try {
+    const { id, imgId } = req.params;
+    const result = await query(
+      `SELECT * FROM product_images WHERE id = $1 AND product_id = $2`,
+      [imgId, id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'ไม่พบรูป' });
+
+    const img = result.rows[0];
+    const wasCover = img.is_cover;
+    const filePath = path.join(imageUploadDir, String(id), img.file_path);
+    if (fs.existsSync(filePath)) {
+      try { fs.unlinkSync(filePath); } catch (e) { console.warn('unlink:', e.message); }
+    }
+
+    await query(`DELETE FROM product_images WHERE id = $1`, [imgId]);
+
+    // ถ้าลบ cover ไป → ตั้งรูปแรกที่เหลือเป็น cover ใหม่
+    if (wasCover) {
+      const next = await query(
+        `SELECT id FROM product_images WHERE product_id = $1
+         ORDER BY display_order ASC, id ASC LIMIT 1`, [id]
+      );
+      if (next.rows.length > 0) {
+        await query(
+          `UPDATE product_images SET is_cover = TRUE WHERE id = $1`,
+          [next.rows[0].id]
+        );
+      }
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('DELETE image error:', err);
     res.status(500).json({ error: err.message });
   }
 });

@@ -2014,7 +2014,7 @@ function StockPage() {
             <>
               <div style={styles.searchBar}>
                 <input style={styles.searchInput}
-                  placeholder="ค้นหา รหัส / ชื่อ / model"
+                  placeholder="ค้นหา รหัส / ชื่อ / model / ยี่ห้อ"
                   value={search} onChange={e => setSearch(e.target.value)} />
                 <select style={{ ...styles.searchInput, flex: 'none', width: 140 }} value={filterType}
                   onChange={e => setFilterType(e.target.value)}>
@@ -2049,11 +2049,12 @@ function StockPage() {
                   <tr>
                     <th style={styles.th}>รหัส</th>
                     <th style={styles.th}>Model</th>
+                    <th style={styles.th}>ยี่ห้อ</th>
                     <th style={styles.th}>ชื่อสินค้า</th>
                     <th style={styles.th}>ประเภท</th>
                     <th style={styles.th}>หมวดหมู่</th>
-                    <th style={styles.th}>หน่วย</th>
                     <th style={{ ...styles.th, textAlign: 'right' }}>ราคาต้นทุน</th>
+                    <th style={{ ...styles.th, textAlign: 'right' }}>ราคาขาย</th>
                     <th style={{ ...styles.th, textAlign: 'right' }}>คงเหลือ</th>
                     <th style={styles.th}></th>
                   </tr>
@@ -2075,11 +2076,12 @@ function StockPage() {
                            onClick={() => setDetailProduct(p)}>{p.product_code}</a>
                       </td>
                       <td style={styles.td}>{p.model || '-'}</td>
+                      <td style={styles.td}>{p.brand || '-'}</td>
                       <td style={styles.td}>{p.name}</td>
                       <td style={styles.td}>{productTypeBadge(p.product_type)}</td>
                       <td style={styles.td}>{p.category_name || '-'}</td>
-                      <td style={styles.td}>{p.default_unit}</td>
                       <td style={{ ...styles.td, textAlign: 'right' }}>{Number(p.avg_cost || p.cost_price || 0).toLocaleString("th-TH", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+                      <td style={{ ...styles.td, textAlign: 'right' }}>{Number(p.sell_price || 0).toLocaleString("th-TH", {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
                       <td style={{ ...styles.td, textAlign: 'right' }}>
                         {p.product_type === 'service' ? '-' : Number(p.stock_qty || 0).toLocaleString()}
                       </td>
@@ -2166,7 +2168,7 @@ function StockPage() {
 /* ========== PRODUCT FORM MODAL ========== */
 function ProductFormModal({ product, categories, onClose, onSaved }) {
   const [form, setForm] = React.useState(product || {
-    name: '', model: '', description: '',
+    name: '', model: '', brand: '', description: '',
     category_id: '', product_type: 'stock',
     default_unit: 'ชิ้น', cost_price: 0, sell_price: 0,
   });
@@ -2211,6 +2213,11 @@ function ProductFormModal({ product, categories, onClose, onSaved }) {
                 onChange={e => setForm(f => ({ ...f, model: e.target.value }))} />
             </div>
             <div>
+              <label style={styles.label}>ยี่ห้อ</label>
+              <input style={styles.input} value={form.brand || ''}
+                onChange={e => setForm(f => ({ ...f, brand: e.target.value }))} />
+            </div>
+            <div>
               <label style={styles.label}>หมวดหมู่</label>
               <select style={styles.input} value={form.category_id || ''}
                 onChange={e => setForm(f => ({ ...f, category_id: e.target.value }))}>
@@ -2244,7 +2251,7 @@ function ProductFormModal({ product, categories, onClose, onSaved }) {
                 onChange={e => setForm(f => ({ ...f, cost_price: e.target.value }))} />
             </div>
             <div style={{ gridColumn: 'span 2' }}>
-              <label style={styles.label}>ราคาต้นทุน</label>
+              <label style={styles.label}>ราคาขาย</label>
               <input type="number" style={styles.input} value={form.sell_price || 0}
                 onChange={e => setForm(f => ({ ...f, sell_price: e.target.value }))} />
             </div>
@@ -2292,12 +2299,14 @@ function ProductDetailModal({ product, onClose }) {
           <div>
             <div style={styles.modalTitle}>{product.product_code} — {product.name}</div>
             <div style={{ ...styles.detailSub, marginTop: 4 }}>
-              Model: {product.model || '-'} · หมวด: {product.category_name || '-'} · คงเหลือ: {Number(product.stock_qty || 0).toLocaleString()}
+              Model: {product.model || '-'} · ยี่ห้อ: {product.brand || '-'} · หมวด: {product.category_name || '-'} · คงเหลือ: {Number(product.stock_qty || 0).toLocaleString()}
             </div>
           </div>
           <button style={{ ...styles.btn(), padding: '4px 10px' }} onClick={onClose}>✕</button>
         </div>
         <div style={styles.modalBody}>
+          <ProductDescriptionBlock description={product.description} />
+          <ProductImageGallery productId={product.id} />
           {product.product_type === 'stock' ? (
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
@@ -2369,6 +2378,205 @@ function ProductDetailModal({ product, onClose }) {
             onSaved={() => { setShowAddSerial(false); load(); }} />
         )}
       </div>
+    </div>
+  );
+}
+
+/* ========== PRODUCT DESCRIPTION BLOCK (Phase 2.14.2) ========== */
+function ProductDescriptionBlock({ description }) {
+  const [expanded, setExpanded] = React.useState(false);
+  if (!description) return null;
+
+  // แยกบรรทัด + ตัดบรรทัดว่าง
+  const lines = String(description).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (lines.length === 0) return null;
+
+  const [firstLine, ...rest] = lines;
+  const COLLAPSE_THRESHOLD = 5; // > 5 บรรทัด → collapse
+  const totalLines = lines.length;
+  const shouldCollapse = totalLines > COLLAPSE_THRESHOLD && !expanded;
+  // ถ้า collapse → แสดง paragraph + bullet 4 ตัวแรก (รวม 5 บรรทัด)
+  const visibleRest = shouldCollapse ? rest.slice(0, COLLAPSE_THRESHOLD - 1) : rest;
+  const hiddenCount = totalLines - (shouldCollapse ? COLLAPSE_THRESHOLD : totalLines);
+
+  return (
+    <div style={{
+      background: '#f9fafb',
+      border: '1px solid #e5e7eb',
+      borderRadius: 8,
+      padding: '12px 16px',
+      marginBottom: 18,
+    }}>
+      <div style={{ fontSize: 14, fontWeight: 600, color: '#1e3a5f', marginBottom: 8 }}>
+        📝 รายละเอียด
+      </div>
+      <div style={{ fontSize: 14, color: '#374151', lineHeight: 1.6 }}>
+        {firstLine}
+      </div>
+      {visibleRest.length > 0 && (
+        <ul style={{
+          margin: '6px 0 0 0',
+          paddingLeft: 22,
+          fontSize: 14,
+          color: '#374151',
+          lineHeight: 1.7,
+        }}>
+          {visibleRest.map((line, i) => (
+            <li key={i}>{line}</li>
+          ))}
+        </ul>
+      )}
+      {totalLines > COLLAPSE_THRESHOLD && (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          style={{
+            marginTop: 8,
+            background: 'none',
+            border: 'none',
+            color: '#2563eb',
+            cursor: 'pointer',
+            fontSize: 13,
+            padding: '4px 0',
+            fontWeight: 500,
+          }}
+        >
+          {expanded
+            ? '▲ ย่อรายละเอียด'
+            : `▼ ดูรายละเอียดเพิ่ม (+${hiddenCount} บรรทัด)`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ========== PRODUCT IMAGE GALLERY (Phase 2.14) ========== */
+function ProductImageGallery({ productId }) {
+  const [images, setImages] = React.useState([]);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const [preview, setPreview] = React.useState(null); // url string
+  const fileRef = React.useRef(null);
+  const MAX = 5;
+
+  const load = () => {
+    fetch(`/api/products/${productId}/images`, { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => setImages(Array.isArray(d) ? d : []))
+      .catch(() => setImages([]));
+  };
+  React.useEffect(load, [productId]);
+
+  const imgUrl = (imgId) =>
+    `/api/products/${productId}/images/${imgId}/file?t=${localStorage.getItem('token')}`;
+
+  const upload = async (e) => {
+    setErr('');
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (images.length >= MAX) {
+      setErr(`อัพรูปได้ไม่เกิน ${MAX} รูป`);
+      e.target.value = '';
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setErr('ไฟล์ใหญ่เกิน 5 MB');
+      e.target.value = '';
+      return;
+    }
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch(`/api/products/${productId}/images`, {
+        method: 'POST', headers: authHeaders(), body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) { setErr(data.error || 'อัพไม่สำเร็จ'); return; }
+      load();
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const setCover = async (imgId) => {
+    const res = await fetch(`/api/products/${productId}/images/${imgId}/cover`, {
+      method: 'PUT', headers: authHeaders(),
+    });
+    if (res.ok) load(); else alert('ตั้งรูปหลักไม่สำเร็จ');
+  };
+
+  const remove = async (imgId) => {
+    if (!confirm('ยืนยันลบรูปนี้?')) return;
+    const res = await fetch(`/api/products/${productId}/images/${imgId}`, {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    if (res.ok) load(); else alert('ลบไม่สำเร็จ');
+  };
+
+  const tile = {
+    position: 'relative', width: 130, height: 130,
+    borderRadius: 8, overflow: 'hidden',
+    border: '1px solid #e5e7eb', background: '#fafbfc',
+  };
+  const coverStar = (active) => ({
+    position: 'absolute', top: 4, left: 4,
+    background: active ? '#fbbf24' : 'rgba(255,255,255,0.85)',
+    color: active ? '#fff' : '#6b7280',
+    border: 'none', borderRadius: 6, padding: '3px 7px',
+    fontSize: 14, cursor: 'pointer', lineHeight: 1,
+    boxShadow: '0 1px 3px rgba(0,0,0,0.15)',
+  });
+  const trashBtn = {
+    position: 'absolute', top: 4, right: 4,
+    background: 'rgba(220,38,38,0.95)', color: '#fff',
+    border: 'none', borderRadius: 6, padding: '3px 7px',
+    fontSize: 12, cursor: 'pointer', lineHeight: 1,
+  };
+
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ fontSize: 15, fontWeight: 600, color: '#1e3a5f' }}>
+          รูปสินค้า ({images.length}/{MAX})
+        </div>
+        <div>
+          <input ref={fileRef} type="file" accept=".jpg,.jpeg,.png,.webp"
+            style={{ display: 'none' }} onChange={upload} />
+          <button style={styles.btn('primary')}
+            onClick={() => fileRef.current && fileRef.current.click()}
+            disabled={busy || images.length >= MAX}>
+            {busy ? 'กำลังอัพ…' : '+ เพิ่มรูป'}
+          </button>
+        </div>
+      </div>
+      {err && <div style={styles.error}>{err}</div>}
+      {images.length === 0 ? (
+        <div style={{ padding: 20, textAlign: 'center', color: '#888',
+                      background: '#fafbfc', borderRadius: 8, border: '1px dashed #e5e7eb' }}>
+          ยังไม่มีรูปสินค้า
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+          {images.map(img => (
+            <div key={img.id} style={tile}>
+              <img src={imgUrl(img.id)} alt={img.file_name}
+                style={{ width: '100%', height: '100%', objectFit: 'cover', cursor: 'pointer' }}
+                onClick={() => setPreview(imgUrl(img.id))} />
+              <button style={coverStar(img.is_cover)} title={img.is_cover ? 'รูปหลัก' : 'ตั้งเป็นรูปหลัก'}
+                onClick={() => setCover(img.id)}>★</button>
+              <button style={trashBtn} title="ลบ" onClick={() => remove(img.id)}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+      {preview && (
+        <div style={{ ...styles.overlay, zIndex: 10000 }} onClick={() => setPreview(null)}>
+          <img src={preview} alt=""
+            style={{ maxWidth: '90vw', maxHeight: '90vh', borderRadius: 8, boxShadow: '0 10px 40px rgba(0,0,0,0.5)' }}
+            onClick={e => e.stopPropagation()} />
+        </div>
+      )}
     </div>
   );
 }
@@ -3853,6 +4061,14 @@ function PODetailInner({ poId, onClose, onReceive, onEdit }) {
     if (res.ok) load();
     else { const d = await res.json().catch(() => ({})); alert(d.error || 'error'); }
   };
+  const remove = async () => {
+    if (!confirm(`ลบ PO ${po.po_number}?\nการลบนี้ไม่สามารถย้อนกลับได้`)) return;
+    const res = await fetch(`/api/purchase-orders/${poId}`, {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    if (res.ok) { onClose(); }
+    else { const d = await res.json().catch(() => ({})); alert(d.error || 'ลบไม่สำเร็จ'); }
+  };
 
   return (<>
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 20px 80px' }}>
@@ -4184,6 +4400,9 @@ function PODetailInner({ poId, onClose, onReceive, onEdit }) {
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '16px 24px', borderTop: '1px solid #e5e7eb' }}>
           {po.status === 'draft' && (
             <button style={styles.btn('danger')} onClick={cancel}>ยกเลิก PO</button>
+          )}
+          {po.status === 'draft' && (
+            <button style={styles.btn('danger')} onClick={remove}>🗑️ ลบ PO</button>
           )}
           <div style={{ flex: 1 }} />
           {po.status === 'draft' && onEdit && (
