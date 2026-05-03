@@ -446,6 +446,7 @@ product_type: 'service' | 'non_stock' | 'stock'
   * non_stock: สินค้าเหมา (นับ stock, ไม่มี serial)
   * stock    : สินค้านับสต็อก (นับ stock + มี serial)
 model
+brand                                                       # ใหม่ Phase 2.14 — ยี่ห้อ
 cost_price  ← ราคาอ้างอิง (default ตอนสร้าง PO) สำหรับ service/non_stock
 sell_price
 stock_qty   ⚠️ อาจเป็น NaN — ต้อง guard ด้วย:
@@ -469,6 +470,24 @@ code, name, contact_person, phone, email, address, tax_id
 **`product_categories`**
 ```
 name, code (auto: CAT-001), description, is_active
+```
+
+**`product_images`** (ใหม่ Phase 2.14 — 2026-05-03)
+```
+product_id (→ products, ON DELETE CASCADE)
+file_name VARCHAR(255)          # ชื่อไฟล์ดั้งเดิม
+file_path VARCHAR(500)          # ชื่อไฟล์บน disk (timestamp_basename.ext)
+mime_type VARCHAR(100)
+file_size INTEGER
+is_cover BOOLEAN DEFAULT FALSE  # รูปหลัก (1 product = 1 cover)
+display_order INTEGER DEFAULT 0
+uploaded_by (→ users, ON DELETE SET NULL)
+uploaded_at TIMESTAMPTZ DEFAULT NOW()
+# Indexes:
+#   uq_product_images_one_cover  UNIQUE (product_id) WHERE is_cover = TRUE
+#   idx_product_images_product_id
+# ไฟล์จริงเก็บที่ /app/uploads/products/{product_id}/
+# Limit: max 5 รูป/สินค้า, 5MB/รูป, .jpg/.png/.webp (enforce ใน backend)
 ```
 
 **`withholding_tax`** + **`withholding_tax_items`**
@@ -524,6 +543,11 @@ created_at, updated_at
 
 -- purchase_orders.status
 'draft' | 'approved' | 'received' | 'cancelled'
+
+-- purchase_orders.payment_status
+'unpaid'    -- ยังไม่ชำระ (default)
+'paid'      -- ชำระแล้ว
+-- ⚠️ ไม่มี 'partial' (เคยเดาผิดแล้วต้องแก้รอบ 2 — เจอ 2026-04-30)
 ```
 
 **ทุกครั้งที่จะ filter/group ตาม column enum:**
@@ -908,6 +932,54 @@ def generate(fname, d):
 
 ---
 
+### 10.18 Vite content hash อาจซ้ำเดิมแม้ source เปลี่ยน (เจอ 2026-04-30)
+**อาการ:** แก้ `App.jsx` แล้ว rebuild เสร็จ แต่ไฟล์ output ยังชื่อเดิม (`index-XXXXXX.js` hash เดิมเป๊ะ) → ทำให้คิดว่า build ไม่ผ่าน → ไล่หา bug ใน Docker cache เป็นชั่วโมง
+
+**Root cause:** Vite ใช้ content hash บน chunk ซึ่งบางครั้ง hash อาจ collide หรือ Vite normalize content คล้ายกันมากจนได้ hash เดิม → **ชื่อไฟล์เหมือนเดิม ≠ เนื้อหาเดิม**
+
+**วิธีตรวจที่ถูก** — ดูเนื้อหาใน build ไม่ใช่ชื่อไฟล์:
+```bash
+# ❌ ผิด — เช็คแค่ชื่อไฟล์
+docker compose exec sales-web ls /usr/share/nginx/html/assets/
+
+# ✅ ถูก — grep string ที่เพิ่งเพิ่มเข้าไป
+docker compose exec sales-web sh -c \
+  'grep -oE "[ก-๛]+" /usr/share/nginx/html/assets/*.js | sort -u | grep "ครบกำหนด"'
+```
+
+**Browser cache เป็นปัญหาแยก:** ถ้า hash เดิมจริงๆ → browser จะใช้ cached JS โดยไม่ download ใหม่ → ต้อง **Ctrl+Shift+R** (hard refresh) หรือเปิด incognito
+
+**บทเรียน:** ตรวจ 3 ชั้นต้องเช็ค "เนื้อหา" ไม่ใช่ "ชื่อ":
+1. Disk: `grep ฯ frontend/src/App.jsx`
+2. Container build: `grep ฯ /usr/share/nginx/html/assets/*.js`
+3. Browser: hard refresh + DevTools Network tab
+
+### 10.19 Server-side tree vs flat — frontend filter ไม่เห็น children (เจอ 2026-04-30)
+**อาการ:** หน้า "หมวดหมู่" ไม่แสดงหมวดย่อย ทั้งที่ DB มี `parent_id` ครบ และ UI logic ดูถูก (`categories.filter(c => c.parent_id === parentId)`)
+
+**Root cause:** Backend `GET /api/product-categories` default ส่ง **tree structure** (nested `children` array) — ไม่ใช่ flat list:
+```json
+[
+  { id: 3, name: "สินค้า", parent_id: null, children: [
+    { id: 5, name: "Sensor", parent_id: 3, children: [] },
+    { id: 6, name: "Gateway", parent_id: 3, children: [] }
+  ]}
+]
+```
+→ `categories.filter(c => c.parent_id === 3)` คืน array ว่าง เพราะ Sensor/Gateway ฝังใน `children` ไม่ได้อยู่ใน root array
+
+**วิธีแก้:** เรียก `?flat=1` (backend มี option นี้อยู่แล้วเพื่อ backward compat):
+```js
+fetch('/api/product-categories?flat=1', ...)
+```
+
+**บทเรียน:**
+- ก่อนใช้ data จาก API → `console.log` หรือ DevTools Network tab ดู shape จริง
+- Backend ที่มี option ทั้ง flat+tree → frontend ทุกที่ต้อง consistent ว่าจะใช้แบบไหน
+- Future: ProductFormModal ใช้ tree ได้ (แสดง indent), แต่ filter logic ต้องใช้ flat
+
+---
+
 ## 📝 11. Workflow การทำงาน (สไตล์ที่พี่ชอบ)
 
 1. **อย่ากล้าเดา** schema หรือ style — ตรวจจาก code จริงก่อน
@@ -1180,6 +1252,98 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 - ⚠️ **บทเรียน:** UI subcategory เคยทำแล้วแต่หาย (`App.jsx.bak_subcategory` 0 bytes) → ก่อน patch ใหม่ต้อง grep verify ก่อนเสมอ ห้ามเชื่อ compaction summary
 
 
+### Phase 2.12 — Tax Calc Refactor (2026-04-29)
+
+#### 2.12A — Tax with Payroll History + Projection
+- ✅ **เปลี่ยนวิธีคำนวณภาษีหัก ณ ที่จ่ายรายเดือน**
+  - เดิม: `salary × 12` ตลอดปี → ปรับเงินเดือนกลางปีแล้วภาษีคำนวณผิด
+  - ใหม่: `yearly = SUM(past payroll) + (current_salary × remaining_months)`
+  - รวม `salary + bonus + overtime + other_income` ของแต่ละเดือนที่ผ่านมา
+  - ใช้เป็น guideline สำหรับหัก ณ ที่จ่ายรายเดือน (เกณฑ์เดียวกับสรรพากร)
+- ✅ Frontend: ดึง payroll history ตอนเปิดหน้าคำนวณ + แสดง projection
+- 📝 Commit: `49879d8`
+
+#### 2.12B — Backend WHT Recalc on Generate
+- ✅ **Backend คำนวณ WHT ใหม่ตอน generate payroll** (ไม่ใช่แค่หน้า preview)
+  - เดิม: WHT คำนวณตอน frontend preview เท่านั้น → DB เก็บค่าผิดถ้า user generate ผ่าน
+  - ใหม่: backend `POST /api/payroll/generate` recalc WHT ตามสูตรใหม่ก่อน insert
+- ✅ Frontend: sync ตารางสรุป UI ให้ตรงกับ DB
+- 📝 Commit: `b2e0520`
+
+
+### Phase 2.13 — PO List UX & Stock Subcategory Fix (2026-04-30)
+
+#### 📋 PO List Enhancements
+- ✅ **เพิ่ม column "ครบกำหนด"** — แสดง `due_date` เป็น locale ไทย หรือ `-` ถ้าไม่มี
+- ✅ **เพิ่ม column "การชำระเงิน"** — badge ตาม `payment_status`:
+  - 🟢 `paid` → "✓ ชำระแล้ว"
+  - ⚪ `unpaid` → "ยังไม่ชำระ"
+  - ⚠️ ระบบจริงมีแค่ 2 ค่า (เคยเดามั่วเป็น 3 ค่า → แก้รอบ 2)
+- ✅ **เพิ่ม footer total row** — แสดงจำนวน PO + ยอดรวมทุก PO ท้ายตาราง
+  - ใช้ `<tfoot>` semantic HTML, bg เทาอ่อน, text navy bold
+  - แสดงเฉพาะตอนมี orders > 0
+- 🚨 **Multi-company future-proofing:** footer ตอนนี้รวม PO ทั้งหมดในระบบ — เมื่อทำ multi-company + pagination ในอนาคตต้องคิดว่ายอดรวมหมายถึง "ของหน้านี้" หรือ "ทั้งระบบหลัง filter"
+
+#### 🗑️ PO Delete via DB
+- ✅ ลบ PO id=1 (PO2026040001) ผ่าน DB ตรงๆ เพราะ status=`received` → backend API ปฏิเสธ
+- ⚠️ Backend `DELETE /:id` ยังจำกัดเฉพาะ `status='draft'` → อนาคตอาจขยายให้ลบ approved/cancelled ได้ (พร้อม soft-delete pattern)
+
+#### 📁 Stock Subcategory Display Fix
+- ✅ แก้ bug หน้าหมวดหมู่ไม่แสดง subcategory — เปลี่ยน `fetch('/api/product-categories')` → `?flat=1`
+- ⚠️ เห็น **section 10.19** สำหรับ root cause + วิธีตรวจ
+
+#### ⚠️ บทเรียนสำคัญ Phase 2.13
+1. **Vite content hash อาจซ้ำเดิม** — ตรวจ 3 ชั้นต้องเช็ค **เนื้อหา** ไม่ใช่ **ชื่อไฟล์ JS** (section 10.18)
+2. **Backend default response shape ต้อง verify** — tree vs flat ทำให้ filter ผิด (section 10.19)
+3. **ห้ามเดา enum** — payment_status มีแค่ unpaid/paid (section 7) ไม่มี partial
+
+
+### Phase 2.14 — Brand + Product Images + Detail UX (2026-05-03)
+
+#### 🏷️ Brand (ยี่ห้อ)
+- ✅ DB: `products.brand VARCHAR(100)` (nullable)
+- ✅ Backend products.js: search/POST/PUT รองรับ brand
+- ✅ Frontend StockPage: column "ยี่ห้อ" หลัง Model + รวมในช่องค้นหา
+- ✅ Frontend Form/Detail: field + sub-header แสดง brand
+
+#### 📸 Product Images
+- ✅ DB: ตาราง `product_images` + partial unique index (1 cover/product)
+- ✅ Backend: 5 endpoints ใหม่
+  - `GET    /api/products/:id/images`
+  - `POST   /api/products/:id/images` (multipart, max 5 รูป/สินค้า, 5MB/รูป)
+  - `GET    /api/products/:id/images/:imgId/file` (สำหรับ `<img src>` ใช้ ?t= query)
+  - `PUT    /api/products/:id/images/:imgId/cover`
+  - `DELETE /api/products/:id/images/:imgId` (auto-reassign cover)
+- ✅ Multer: max 5 รูป/สินค้า, 5MB/รูป, .jpg/.png/.webp
+- ✅ Storage: `/app/uploads/products/{product_id}/` (volume `uploads_data` เดิม)
+- ✅ Frontend `ProductImageGallery` component:
+  - Thumbnail grid + ★ toggle cover + ✕ delete + click preview เต็มจอ
+  - รูปแรกที่อัพ = cover อัตโนมัติ
+  - **อยู่เฉพาะใน Detail modal** — Form (เพิ่ม/แก้ไข) ไม่มีอัพรูป (เก็บไว้พิจารณาภายหลัง)
+
+#### 📝 Description Block UX
+- ✅ Frontend `ProductDescriptionBlock` component (block แยกใน Detail body):
+  - กล่องเทาอ่อน + paragraph แรก + bullet list บรรทัดที่เหลือ
+  - ถ้า > 5 บรรทัด → collapse + ปุ่ม "▼ ดูรายละเอียดเพิ่ม (+N บรรทัด)"
+- ⚠️ เริ่มแรก patch ใส่ใน sub-header (Phase 2.14.1) → อ่านยาก → revert + redesign เป็น block แยก (Phase 2.14.2)
+
+#### 💰 Stock Table — Layout ใหม่
+- ✅ ลบ column "หน่วย" → เพิ่ม column "ราคาขาย" (`sell_price`, 2 ตำแหน่งทศนิยม)
+- ✅ Layout ใหม่: รหัส | Model | ยี่ห้อ | ชื่อสินค้า | ประเภท | หมวดหมู่ | ราคาต้นทุน | ราคาขาย | คงเหลือ
+- ⚠️ Column "ราคาต้นทุน" ในตาราง = `avg_cost || cost_price` (ไม่ใช่ sell_price!) — ตามที่ตกลงไว้
+
+#### 🏷️ Fixed Legacy Bug
+- ✅ Form label "ราคาต้นทุน" ที่ผูกกับ `sell_price` → เปลี่ยนเป็น "ราคาขาย"
+- ⚠️ Column ตารางคงไว้ "ราคาต้นทุน" (ดึง avg_cost || cost_price) ตามคำขอ
+- 📝 Bug นี้อยู่มานานก่อน Phase 2.14 — เจอเพราะผู้ใช้ถามว่า "ราคาทุน vs ราคาต้นทุน ต่างยังไง"
+
+#### ⚠️ บทเรียนสำคัญ Phase 2.14
+1. **Patch ทีละ step ปลอดภัยกว่ารวบ** — ส่งเป็น 5 patch (`.14`, `.14.1`–`.14.4`) ผู้ใช้ test แต่ละ step ก่อนไปต่อ → จับปัญหา UX ได้ทัน เช่น "รายละเอียดดูติดกัน"
+2. **UX ต้อง iterate** — Phase 2.14.1 ใส่ description ใน sub-header → ผู้ใช้บอกอ่านยาก → 2.14.2 redesign เป็น component แยก
+3. **Check label vs binding** — เจอ legacy bug "ราคาต้นทุน" ↔ sell_price ที่อยู่มานาน
+4. **partial unique index ดีกว่า trigger** สำหรับ "1 cover/product" — atomic + simple ใน DB level
+5. **Token via `?t=` query** สำหรับ `<img src>` — endpoint ต้อง authenticate แต่ HTTP `<img>` ไม่ส่ง Authorization header (ใช้ pattern เดิมระบบ — middleware/auth.js รองรับทั้ง 2 แบบ)
+
 
 ### Backup & Tooling (2026-04-25)
 - ✅ **`backup.sh`** — full backup script (DB dump + source tar + junk cleanup + .gitignore update)
@@ -1212,23 +1376,26 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 
 ---
 
-**Last Updated:** 2026-04-27 evening (Phase 2.10 — Payroll Documents complete)
+**Last Updated:** 2026-05-03 (Phase 2.14 — brand + product images + description UX)
 
 **Latest Commits:**
+- `9f29733` — feat(stock): brand + product images + description UX (Phase 2.14)
+- `f3ac8bb` — feat(po): list columns + footer total + fix category subcategory display
+- `f9a04b9` — fix(payroll): backend recalc wht ตอน generate + sync ตารางสรุป UI
+- `49879d8` — fix(tax): คำนวณภาษีหัก ณ ที่จ่ายโดยใช้ payroll history + projection
+- `ab98f88` — feat(stock): restore subcategory UI + lesson learned
+- `0f27262` — feat(payroll): documents export + unapprove + WeasyPrint migration
 - `c088ccf` — docs: update PROJECT_CONTEXT.md for Phase 2.7-B2
 - `c6f8a39` — feat: PO Form แบบ ภ.ง.ด. + Multi-WHT per (ภ.ง.ด. × ประเภท) (Phase B2)
 - `eb143f8` — feat: PO modal→page + WHT rate dropdown + multi-page PDF (Phase A + B1)
 - `323d1f5` — feat: per-item income_type + multi-WHT per PO (Phase 2.9)
 - `90f7cfd` — feat: pay modal + bank accounts + slip upload (Phase 2.7-2.8)
 - `174af95` — Phase 1 final: WHT 50twi with per-item pnd_form and income_type
-- `dd4cead` — feat(po): edit, unapprove + per-item WHT (Phase 2.4 + 2.5)
-- `aff5595` — chore: add backup script and .gitignore rules
-- `86def56` — feat(po): add per-item description field
-- `55ff3ce` — feat(po): switch PO PDF to WeasyPrint with proper Thai vowel rendering
 
 **Pending commit:**
-- Phase 2.10 — Payroll Documents & Workflow (รายงานเงินเดือน + สลิป + สปส. + unapprove + ปุ่ม Export)
-- Department CRUD route (จาก phase ก่อน)
-- Move db scripts → db/scripts/
-- Volume mount in docker-compose.yml (dev hot-reload)
-- Update PROJECT_CONTEXT.md + NEW_CHAT_TEMPLATE.md + CHANGELOG.md
+- docs: update CHANGELOG.md + PROJECT_CONTEXT.md for Phase 2.14 (commit นี้)
+
+**Pending features (รอทำต่อ):**
+- ⏳ Filter + pagination หน้า PO list (server-side, ?page=&limit=)
+- ⏳ Hybrid form: อัพรูปได้ตอนเพิ่ม/แก้สินค้า (ตอนนี้อยู่แค่ Detail) — เก็บไว้พิจารณาภายหลัง
+- ⏳ Lifetime feature ที่ค้างอยู่ (ดู section "Pending รอทำต่อ" ด้านบน)

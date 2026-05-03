@@ -1,3 +1,57 @@
+## [Phase 2.14 — Brand + Product Images + Detail UX] — 2026-05-03
+
+### Added
+
+#### 🏷️ Brand (ยี่ห้อ)
+- **DB:** `products.brand VARCHAR(100)` (nullable)
+- **Backend `products.js`:** GET search รวม brand + POST/PUT รับ/บันทึก brand
+- **Frontend StockPage:** column "ยี่ห้อ" หลัง Model + รวมในช่องค้นหา
+- **Frontend ProductFormModal:** field "ยี่ห้อ" ใต้ Model
+- **Frontend ProductDetailModal:** sub-header แสดง "Model · ยี่ห้อ · หมวด · คงเหลือ"
+
+#### 📸 Product Images
+- **DB:** ตาราง `product_images` ใหม่ (file_name, file_path, is_cover, display_order, …)
+  - Partial unique index `uq_product_images_one_cover` — บังคับ 1 product = 1 cover เท่านั้น
+  - FK product_id ON DELETE CASCADE / uploaded_by ON DELETE SET NULL
+- **Backend:** เพิ่ม 5 endpoints + multer config
+  - `GET    /api/products/:id/images`
+  - `POST   /api/products/:id/images` (multipart, max 5 รูป/สินค้า, 5MB/รูป, .jpg/.png/.webp)
+  - `GET    /api/products/:id/images/:imgId/file` (สำหรับ `<img src>` ใช้ `?t=` query)
+  - `PUT    /api/products/:id/images/:imgId/cover`
+  - `DELETE /api/products/:id/images/:imgId` (auto-reassign cover ถ้าลบรูป cover)
+- **Storage:** `/app/uploads/products/{product_id}/` (volume `uploads_data` เดิม)
+- **Frontend `ProductImageGallery`** (component ใหม่ ใน `ProductDetailModal`):
+  - Thumbnail grid + ★ toggle cover + ✕ delete + click preview เต็มจอ
+  - รูปแรกที่อัพ = cover อัตโนมัติ
+
+#### 📝 Description Block UX
+- **Frontend `ProductDescriptionBlock`** (component ใหม่):
+  - กล่องเทาอ่อนแยกใน Detail body (ไม่ยัดใน sub-header)
+  - บรรทัดแรก = paragraph, บรรทัด 2+ = bullet list (•)
+  - ถ้า > 5 บรรทัด → collapse + ปุ่ม "▼ ดูรายละเอียดเพิ่ม (+N บรรทัด)"
+
+#### 💰 Stock Table — ราคาขาย column
+- ลบ column "หน่วย" → เพิ่ม column "ราคาขาย" (`sell_price`, format 2 ตำแหน่งทศนิยม)
+- เหตุผล: ตารางมี 9 columns เต็มแล้ว — หน่วยส่วนใหญ่ซ้ำๆ "ชิ้น" ดูใน Detail ได้
+- Layout ใหม่: รหัส | Model | ยี่ห้อ | ชื่อสินค้า | ประเภท | หมวดหมู่ | ราคาต้นทุน | **ราคาขาย** | คงเหลือ
+
+### Fixed
+
+#### 🏷️ Form label — "ราคาต้นทุน" สับสนกับ column ในตาราง
+- **Form** field ที่ผูกกับ `sell_price` มี label "ราคาต้นทุน" → **เปลี่ยนเป็น "ราคาขาย"**
+- Column ในตารางยังคง "ราคาต้นทุน" ตามคำขอ (ดึงจาก `avg_cost || cost_price`)
+- Backend ไม่แตะ — เปลี่ยนแค่ UI label
+
+### Lesson Learned
+
+1. **Patch ทีละ step ปลอดภัยกว่ารวบ** — Phase 2.14 ส่งเป็น 5 patch (`.14`, `.14.1`–`.14.4`) ผู้ใช้ทดสอบแต่ละ step ก่อนไปต่อ → จับปัญหา UX ได้ทัน เช่น "รายละเอียดดูติดกัน"
+2. **อย่าเดาก่อน paste จริง** — เริ่ม patch description ใส่ใน sub-header (Phase 2.14.1) → ผู้ใช้บอกอ่านยาก → revert + redesign เป็น component แยก (Phase 2.14.2)
+3. **Check label vs binding ทุกครั้ง** — เจอ legacy bug "ราคาต้นทุน" ผูกกับ `sell_price` ที่อยู่มานานก่อน Phase นี้
+4. **partial unique index ดีกว่า trigger** สำหรับ "1 cover/product" — atomic + simple
+5. **Token via `?t=` query** สำหรับ `<img src>` — endpoint รูปต้อง `authenticate` แต่ HTTP `<img>` ไม่ส่ง Authorization header
+
+---
+
 # Changelog
 
 โครงการ IDHC Sales Management System
