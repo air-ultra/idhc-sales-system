@@ -113,6 +113,7 @@ const menuItems = [
   { key: 'staff', icon: '👥', label: 'Staff Management' },
   { key: 'payroll', icon: '💰', label: 'Payroll' },
   { key: 'customers', icon: '🏢', label: 'ลูกค้า' },
+  { key: 'quotation', icon: '🧾', label: 'ใบเสนอราคา' },
   { key: 'stock', icon: '📦', label: 'คลังสินค้า' },
   { key: 'purchase', icon: '🛒', label: 'ใบสั่งซื้อ' },
   { key: 'withholding', icon: '📄', label: 'หัก ณ ที่จ่าย' },
@@ -123,13 +124,21 @@ function Sidebar({ active, onNavigate, user, onLogout }) {
   const navigate = useNavigate();
   const location = useLocation();
   const isOnPurchaseRoute = location.pathname.startsWith('/purchase');
+  const isOnQuotationRoute = location.pathname.startsWith('/quotation');
   return (
     <div style={styles.sidebar}>
       <div style={styles.sidebarLogo}><div style={styles.sidebarLogoText}>Sales System</div><div style={styles.sidebarLogoSub}>Management Platform</div></div>
       <nav style={styles.sidebarNav}>
         {menuItems.map(item => {
-          const isActive = item.key === 'purchase' ? isOnPurchaseRoute : (active === item.key && !isOnPurchaseRoute);
+          const isActive = item.key === 'purchase' ? isOnPurchaseRoute
+                          : item.key === 'quotation' ? isOnQuotationRoute
+                          : (active === item.key && !isOnPurchaseRoute && !isOnQuotationRoute);
           const handleClick = () => {
+            if (item.key === 'quotation') {
+              navigate('/quotation');
+              onNavigate(item.key);
+              return;
+            }
             if (item.key === 'purchase') {
               navigate('/purchase');
             } else {
@@ -1057,6 +1066,10 @@ function AppInner() {
           <Route path="/purchase/new" element={<POFormPage />} />
           <Route path="/purchase/:id" element={<PODetailPage />} />
           <Route path="/purchase/:id/edit" element={<POFormPage />} />
+          <Route path="/quotation" element={<QuotationListPage />} />
+          <Route path="/quotation/new" element={<QuotationFormPage />} />
+          <Route path="/quotation/:id" element={<QuotationDetailPage />} />
+          <Route path="/quotation/:id/edit" element={<QuotationFormPage />} />
           <Route path="*" element={
             <>
               {page === 'dashboard' && <DashboardPage staffList={staffList} />}
@@ -3410,6 +3423,1272 @@ function CustomerContactModal({ customerId, contact, onClose, onSaved }) {
     </div>
   );
 }
+
+/* ========== QUOTATION LIST PAGE (Phase 3.2A) ========== */
+function QuotationListPage() {
+  const [quotations, setQuotations] = React.useState([]);
+  const [search, setSearch] = React.useState('');
+  const [filterStatus, setFilterStatus] = React.useState('');
+  const navigate = useNavigate();
+
+  const load = () => {
+    const params = new URLSearchParams();
+    if (search) params.append('search', search);
+    if (filterStatus) params.append('status', filterStatus);
+    const qs = params.toString();
+    fetch(`/api/quotations${qs ? '?' + qs : ''}`, { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => setQuotations(Array.isArray(d) ? d : []))
+      .catch(() => setQuotations([]));
+  };
+  React.useEffect(load, [search, filterStatus]);
+
+  const remove = async (q) => {
+    if (!confirm(`ยืนยันลบใบเสนอราคา ${q.quotation_no}?`)) return;
+    const res = await fetch(`/api/quotations/${q.id}`, {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) load();
+    else alert(data.error || 'ลบไม่สำเร็จ');
+  };
+
+  const statusBadge = (eff) => {
+    if (eff === 'draft')    return <span style={styles.badge()}>แบบร่าง</span>;
+    if (eff === 'sent')     return <span style={styles.badge('blue')}>ส่งแล้ว</span>;
+    if (eff === 'accepted') return <span style={styles.badge('green')}>ตอบรับ</span>;
+    if (eff === 'rejected') return <span style={styles.badge('red')}>ปฏิเสธ</span>;
+    if (eff === 'expired')  return <span style={{ ...styles.badge(), background: '#f3e8ff', color: '#6b21a8', borderColor: '#e9d5ff' }}>หมดอายุ</span>;
+    return <span style={styles.badge()}>{eff}</span>;
+  };
+
+  return (
+    <div>
+      <div style={styles.pageHeader}>
+        <div style={styles.pageTitle}>🧾 ใบเสนอราคา (Quotation)</div>
+        <button style={styles.btn('primary')} onClick={() => navigate('/quotation/new')}>
+          + สร้างใบเสนอราคา
+        </button>
+      </div>
+
+      <div style={styles.card}>
+        <div style={styles.searchBar}>
+          <input style={styles.searchInput}
+            placeholder="ค้นหา เลขที่ / ลูกค้า / โปรเจค / เลขที่อ้างอิง"
+            value={search} onChange={e => setSearch(e.target.value)} />
+          <select style={{ ...styles.searchInput, flex: 'none', width: 160 }}
+            value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
+            <option value="">ทุกสถานะ</option>
+            <option value="draft">แบบร่าง</option>
+            <option value="sent">ส่งแล้ว</option>
+            <option value="accepted">ตอบรับ</option>
+            <option value="rejected">ปฏิเสธ</option>
+          </select>
+        </div>
+
+        <table style={styles.table}>
+          <thead>
+            <tr>
+              <th style={styles.th}>เลขที่</th>
+              <th style={styles.th}>วันที่</th>
+              <th style={styles.th}>ลูกค้า</th>
+              <th style={styles.th}>โปรเจค</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>ยอดรวม</th>
+              <th style={styles.th}>หมดอายุ</th>
+              <th style={styles.th}>สถานะ</th>
+              <th style={styles.th}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {quotations.map(q => (
+              <tr key={q.id} style={styles.trHover}>
+                <td style={styles.td}>
+                  <a style={{ color: '#2563eb', textDecoration: 'underline', cursor: 'pointer' }}
+                     onClick={() => navigate(`/quotation/${q.id}`)}>{q.quotation_no}</a>
+                </td>
+                <td style={styles.td}>{new Date(q.issue_date).toLocaleDateString('th-TH')}</td>
+                <td style={styles.td}>
+                  <div style={{ fontSize: 13 }}>{q.customer_name || '-'}</div>
+                  {q.customer_code && <div style={{ fontSize: 11, color: '#888' }}>{q.customer_code}</div>}
+                </td>
+                <td style={styles.td}>{q.project_name || '-'}</td>
+                <td style={{ ...styles.td, textAlign: 'right' }}>
+                  {Number(q.grand_total || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </td>
+                <td style={styles.td}>
+                  {q.valid_until ? new Date(q.valid_until).toLocaleDateString('th-TH') : '-'}
+                </td>
+                <td style={styles.td}>{statusBadge(q.effective_status || q.status)}</td>
+                <td style={styles.td}>
+                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                    <button style={{ ...styles.btn(), padding: '6px 12px', fontSize: 12 }}
+                      onClick={() => navigate(`/quotation/${q.id}`)}>ดู</button>
+                    <button style={{ ...styles.btn(), padding: '6px 12px', fontSize: 12 }}
+                      onClick={() => navigate(`/quotation/${q.id}/edit`)}>แก้ไข</button>
+                    <button style={{ ...styles.btn('danger'), padding: '6px 12px', fontSize: 12 }}
+                      onClick={() => remove(q)}>ลบ</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {quotations.length === 0 && (
+              <tr><td style={{ ...styles.td, textAlign: 'center', color: '#888', padding: 30 }} colSpan="8">
+                ไม่มีใบเสนอราคา — กด "+ สร้างใบเสนอราคา" เพื่อเริ่มต้น
+              </td></tr>
+            )}
+          </tbody>
+          {quotations.length > 0 && (
+            <tfoot>
+              <tr style={{ background: '#fafbfc', borderTop: '2px solid #f0f2f5' }}>
+                <td style={{ ...styles.td, fontWeight: 700, color: '#1e3a5f' }} colSpan="3">รวมทั้งหมด</td>
+                <td style={{ ...styles.td, fontWeight: 700, color: '#1e3a5f' }}>{quotations.length} ใบ</td>
+                <td style={{ ...styles.td, textAlign: 'right', fontWeight: 700, color: '#1e3a5f' }}>
+                  {quotations.reduce((sum, q) => sum + Number(q.grand_total || 0), 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </td>
+                <td style={styles.td} colSpan="3"></td>
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ========== QT — Inline SVG Icons (Lucide-style) ========== */
+const QtIcon = ({ name, size = 16, color = 'currentColor', strokeWidth = 1.75 }) => {
+  const paths = {
+    user:     <><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/></>,
+    users:    <><circle cx="9" cy="8" r="4"/><path d="M3 21v-1a6 6 0 0 1 12 0v1"/><path d="M16 4a4 4 0 0 1 0 8"/><path d="M22 21v-1a6 6 0 0 0-3-5"/></>,
+    building: <><rect x="4" y="3" width="16" height="18" rx="1"/><path d="M8 7h2M14 7h2M8 11h2M14 11h2M8 15h2M14 15h2"/></>,
+    phone:    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92Z"/>,
+    mail:     <><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m2 7 10 7 10-7"/></>,
+    mapPin:   <><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></>,
+    hash:     <><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></>,
+    calendar: <><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></>,
+    clock:    <><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></>,
+    package:  <><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.27 6.96 12 12.01l8.73-5.05M12 22.08V12"/></>,
+    plus:     <><path d="M12 5v14M5 12h14"/></>,
+    trash:    <><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6M14 11v6"/></>,
+    receipt:  <><path d="M4 2v20l3-2 3 2 3-2 3 2 3-2 1 2V2"/><path d="M16 8H8M16 12H8M13 16H8"/></>,
+    fileText: <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></>,
+    sparkles: <><path d="m12 3-1.5 4.5L6 9l4.5 1.5L12 15l1.5-4.5L18 9l-4.5-1.5L12 3Z"/><path d="M19 13l-1 3-3 1 3 1 1 3 1-3 3-1-3-1-1-3ZM5 13l-1 3-3 1 3 1 1 3 1-3 3-1-3-1-1-3Z"/></>,
+    chevron:  <path d="m6 9 6 6 6-6"/>,
+    x:        <path d="M18 6 6 18M6 6l12 12"/>,
+  };
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+      stroke={color} strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round"
+      style={{ display: 'inline-block', verticalAlign: '-2px', flexShrink: 0 }}>
+      {paths[name]}
+    </svg>
+  );
+};
+
+/* ========== QT — Modern Style Tokens (scoped) ========== */
+const qtStyles = {
+  page: { background: '#f5f7fa', minHeight: '100vh', padding: '0 0 40px' },
+  pageInner: { maxWidth: 1200, margin: '0 auto', padding: '20px 24px' },
+  topBar: {
+    position: 'sticky', top: 0, zIndex: 50, background: 'rgba(245,247,250,0.92)',
+    backdropFilter: 'blur(8px)', padding: '16px 0',
+    borderBottom: '1px solid #e5e7eb', marginBottom: 20,
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+  },
+  pageTitle: {
+    fontSize: 22, fontWeight: 700, color: '#0f172a',
+    display: 'flex', alignItems: 'center', gap: 10,
+  },
+  card: {
+    background: '#fff', borderRadius: 12,
+    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04)',
+    border: '1px solid #e5e7eb',
+    marginBottom: 16, overflow: 'hidden',
+  },
+  cardHeader: {
+    padding: '14px 20px', borderBottom: '1px solid #f1f5f9',
+    display: 'flex', alignItems: 'center', gap: 8,
+    fontSize: 13, fontWeight: 600, color: '#475569',
+    textTransform: 'uppercase', letterSpacing: '0.05em',
+  },
+  cardBody: { padding: 20 },
+  label: { display: 'block', fontSize: 12, fontWeight: 500, color: '#64748b', marginBottom: 6, letterSpacing: '0.01em' },
+  input: {
+    width: '100%', padding: '10px 12px',
+    border: '1px solid #e2e8f0', borderRadius: 8,
+    fontSize: 14, color: '#0f172a', background: '#fff',
+    transition: 'all 0.15s', outline: 'none', fontFamily: 'inherit',
+  },
+  inputFocus: { borderColor: '#3b82f6', boxShadow: '0 0 0 3px rgba(59,130,246,0.1)' },
+  btnPrimary: {
+    padding: '10px 18px', background: '#0f172a', color: '#fff',
+    border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600,
+    cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6,
+    transition: 'background 0.15s',
+    boxShadow: '0 1px 2px rgba(15,23,42,0.1)',
+  },
+  btn: {
+    padding: '10px 16px', background: '#fff', color: '#475569',
+    border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 14, fontWeight: 500,
+    cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6,
+    transition: 'all 0.15s',
+  },
+  btnIcon: {
+    padding: '8px', background: '#fff', color: '#64748b',
+    border: '1px solid #e2e8f0', borderRadius: 8, cursor: 'pointer',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    transition: 'all 0.15s',
+  },
+  btnDanger: {
+    padding: '6px 8px', background: '#fff', color: '#dc2626',
+    border: '1px solid #fecaca', borderRadius: 6, cursor: 'pointer',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  },
+  divider: { height: 1, background: '#f1f5f9', margin: '16px 0' },
+  customerInfo: {
+    background: '#f8fafc', borderRadius: 8, padding: '14px 16px',
+    border: '1px solid #e2e8f0',
+    fontSize: 13, color: '#475569', lineHeight: 1.7,
+  },
+  freeTextRow: {
+    background: 'linear-gradient(to right, #fef9c3, #fefce8)',
+    borderLeft: '3px solid #eab308',
+  },
+  badge: {
+    display: 'inline-flex', alignItems: 'center', gap: 4,
+    padding: '2px 8px', borderRadius: 4,
+    fontSize: 11, fontWeight: 600,
+    background: '#fef3c7', color: '#a16207',
+  },
+  summaryRow: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '8px 0', fontSize: 14,
+  },
+  monoNum: { fontVariantNumeric: 'tabular-nums', fontWeight: 500 },
+  errorBox: {
+    background: '#fef2f2', color: '#b91c1c', padding: '12px 16px',
+    borderRadius: 8, fontSize: 14, marginBottom: 16,
+    border: '1px solid #fecaca',
+    display: 'flex', alignItems: 'center', gap: 8,
+  },
+};
+
+/* ========== QUOTATION FORM PAGE — Modern ========== */
+const QT_WHT_RATES = ['0','1','2','3','5','10','15'];
+
+function QuotationFormPage() {
+  const navigate = useNavigate();
+  const { id } = useParams();
+  const isEdit = !!id;
+
+  // Master data
+  const [customers, setCustomers] = React.useState([]);
+  const [products, setProducts] = React.useState([]);
+  const [staffList, setStaffList] = React.useState([]);
+  const [contactsForCustomer, setContactsForCustomer] = React.useState([]);
+  const [showCustomerForm, setShowCustomerForm] = React.useState(false);
+  const [showContactForm, setShowContactForm] = React.useState(false);
+
+  // Form state
+  const [form, setForm] = React.useState({
+    customer_id: '', contact_id: '', salesperson_id: '',
+    issue_date: new Date().toISOString().slice(0, 10),
+    valid_days: 30, credit_days: 30,
+    project_name: '', reference_no: '',
+    price_includes_vat: false,
+    discount_mode: 'percent', discount_percent: 0, discount_amount: 0,
+    vat_rate: 7, wht_rate: 0,
+    notes: '',
+    items: [],
+  });
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+
+  // Load master data
+  React.useEffect(() => {
+    fetch('/api/customers', { headers: authHeaders() })
+      .then(r => r.json()).then(d => setCustomers(Array.isArray(d) ? d : []));
+    fetch('/api/products?limit=200', { headers: authHeaders() })
+      .then(r => r.json()).then(d => setProducts(Array.isArray(d) ? d : (d.data || [])));
+    fetch('/api/staff?limit=100', { headers: authHeaders() })
+      .then(r => r.json()).then(d => setStaffList(Array.isArray(d) ? d : (d.data || [])));
+  }, []);
+
+  // Load existing quotation if edit
+  React.useEffect(() => {
+    if (!isEdit) return;
+    fetch(`/api/quotations/${id}`, { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) { setErr(d.error); return; }
+        setForm({
+          customer_id: d.customer_id || '',
+          contact_id: d.contact_id || '',
+          salesperson_id: d.salesperson_id || '',
+          issue_date: d.issue_date ? d.issue_date.slice(0, 10) : new Date().toISOString().slice(0, 10),
+          valid_days: d.valid_days || 30,
+          credit_days: d.credit_days || 0,
+          project_name: d.project_name || '',
+          reference_no: d.reference_no || '',
+          price_includes_vat: !!d.price_includes_vat,
+          discount_mode: d.discount_mode || 'percent',
+          discount_percent: Number(d.discount_percent || 0),
+          discount_amount: Number(d.discount_amount || 0),
+          vat_rate: Number(d.vat_rate || 7),
+          wht_rate: Number(d.wht_rate || 0),
+          notes: d.notes || '',
+          items: (d.items || []).map(it => ({
+            product_id: it.product_id || null,
+            product_name: it.product_name || '',
+            product_model: it.product_model || '',
+            product_brand: it.product_brand || '',
+            description: it.description || '',
+            quantity: Number(it.quantity || 1),
+            unit: it.unit || '',
+            unit_price: Number(it.unit_price || 0),
+          })),
+        });
+      });
+  }, [id, isEdit]);
+
+  // Load contacts when customer changes
+  React.useEffect(() => {
+    if (!form.customer_id) { setContactsForCustomer([]); return; }
+    fetch(`/api/customers/${form.customer_id}/contacts`, { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => {
+        const list = Array.isArray(d) ? d : [];
+        setContactsForCustomer(list);
+        if (!isEdit && !form.contact_id) {
+          const primary = list.find(c => c.is_primary);
+          if (primary) setForm(f => ({ ...f, contact_id: primary.id }));
+        }
+      });
+  }, [form.customer_id]);
+
+  const selectedCustomer = customers.find(c => c.id === Number(form.customer_id));
+
+  const addProductItem = (productId) => {
+    const p = products.find(x => x.id === Number(productId));
+    if (!p) return;
+    setForm(f => ({
+      ...f,
+      items: [...f.items, {
+        product_id: p.id,
+        product_name: p.name || '',
+        product_model: p.model || '',
+        product_brand: p.brand || '',
+        description: p.description || '',
+        quantity: 1,
+        unit: p.default_unit || 'ชิ้น',
+        unit_price: Number(p.sell_price || 0),
+      }]
+    }));
+  };
+
+  const addFreeTextItem = () => {
+    setForm(f => ({
+      ...f,
+      items: [...f.items, {
+        product_id: null,
+        product_name: '',
+        product_model: '',
+        product_brand: '',
+        description: '',
+        quantity: 1,
+        unit: 'รายการ',
+        unit_price: 0,
+      }]
+    }));
+  };
+
+  const updateItem = (idx, field, value) => {
+    setForm(f => ({
+      ...f,
+      items: f.items.map((it, i) => i === idx ? { ...it, [field]: value } : it),
+    }));
+  };
+
+  const removeItem = (idx) => {
+    setForm(f => ({ ...f, items: f.items.filter((_, i) => i !== idx) }));
+  };
+
+  // Compute summary
+  const round2 = (n) => Math.round(Number(n) * 100) / 100;
+  const subtotal = form.items.reduce(
+    (s, it) => s + Number(it.quantity || 0) * Number(it.unit_price || 0), 0
+  );
+  let discountAmount = 0;
+  if (form.discount_mode === 'percent') {
+    discountAmount = round2(subtotal * Number(form.discount_percent || 0) / 100);
+  } else {
+    discountAmount = round2(Number(form.discount_amount || 0));
+  }
+  if (discountAmount > subtotal) discountAmount = subtotal;
+  const amountAfterDiscount = round2(subtotal - discountAmount);
+  const vatRate = Number(form.vat_rate || 0);
+  let vatAmount, grandTotal;
+  if (form.price_includes_vat) {
+    vatAmount = round2(amountAfterDiscount * vatRate / (100 + vatRate));
+    grandTotal = amountAfterDiscount;
+  } else {
+    vatAmount = round2(amountAfterDiscount * vatRate / 100);
+    grandTotal = round2(amountAfterDiscount + vatAmount);
+  }
+  const whtAmount = round2(amountAfterDiscount * Number(form.wht_rate || 0) / 100);
+  const netPayable = round2(grandTotal - whtAmount);
+
+  const fmt = (n) => Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const save = async () => {
+    setErr('');
+    if (!form.customer_id) { setErr('กรุณาเลือกลูกค้า'); return; }
+    if (form.items.length === 0) { setErr('ต้องมีรายการอย่างน้อย 1 รายการ'); return; }
+    for (let i = 0; i < form.items.length; i++) {
+      if (!form.items[i].product_name || !form.items[i].product_name.trim()) {
+        setErr(`รายการที่ ${i + 1} ต้องระบุชื่อ`);
+        return;
+      }
+    }
+    setBusy(true);
+    try {
+      const url = isEdit ? `/api/quotations/${id}` : '/api/quotations';
+      const method = isEdit ? 'PUT' : 'POST';
+      const res = await fetch(url, {
+        method, headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json();
+      if (!res.ok) { setErr(data.error || 'บันทึกไม่สำเร็จ'); return; }
+      navigate(`/quotation/${data.id}`);
+    } finally { setBusy(false); }
+  };
+
+  // ───── Render ─────
+  return (
+    <div style={qtStyles.page}>
+      <div style={qtStyles.pageInner}>
+        {/* Sticky top bar */}
+        <div style={qtStyles.topBar}>
+          <div style={qtStyles.pageTitle}>
+            <QtIcon name="fileText" size={22} color="#0f172a" />
+            {isEdit ? 'แก้ไขใบเสนอราคา' : 'สร้างใบเสนอราคา'}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button style={qtStyles.btn} onClick={() => navigate(isEdit ? `/quotation/${id}` : '/quotation')}>
+              ยกเลิก
+            </button>
+            <button style={{ ...qtStyles.btnPrimary, opacity: busy ? 0.6 : 1 }} onClick={save} disabled={busy}>
+              {busy ? 'กำลังบันทึก…' : <><QtIcon name="sparkles" size={14} color="#fff" /> บันทึก</>}
+            </button>
+          </div>
+        </div>
+
+        {err && (
+          <div style={qtStyles.errorBox}>
+            <QtIcon name="x" size={18} color="#dc2626" />
+            <span>{err}</span>
+          </div>
+        )}
+
+        {/* ===== Card: ลูกค้า ===== */}
+        <div style={qtStyles.card}>
+          <div style={qtStyles.cardHeader}>
+            <QtIcon name="building" size={14} color="#475569" />
+            ข้อมูลลูกค้า
+          </div>
+          <div style={qtStyles.cardBody}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <div>
+                <label style={qtStyles.label}>ลูกค้า *</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <select style={{ ...qtStyles.input, flex: 1 }} value={form.customer_id}
+                    onChange={e => setForm(f => ({ ...f, customer_id: e.target.value, contact_id: '' }))}>
+                    <option value="">— เลือกลูกค้า —</option>
+                    {customers.map(c => (
+                      <option key={c.id} value={c.id}>{c.customer_code} — {c.name}</option>
+                    ))}
+                  </select>
+                  <button style={qtStyles.btnIcon} onClick={() => setShowCustomerForm(true)} title="เพิ่มลูกค้าใหม่">
+                    <QtIcon name="plus" size={16} />
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label style={qtStyles.label}>ผู้ประสานงาน</label>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <select style={{ ...qtStyles.input, flex: 1, opacity: form.customer_id ? 1 : 0.5 }}
+                    disabled={!form.customer_id}
+                    value={form.contact_id || ''}
+                    onChange={e => setForm(f => ({ ...f, contact_id: e.target.value }))}>
+                    <option value="">— ไม่ระบุ —</option>
+                    {contactsForCustomer.map(ct => (
+                      <option key={ct.id} value={ct.id}>
+                        {ct.is_primary ? '★ ' : ''}{ct.name}{ct.position ? ` (${ct.position})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <button style={{ ...qtStyles.btnIcon, opacity: form.customer_id ? 1 : 0.5 }}
+                    onClick={() => setShowContactForm(true)}
+                    disabled={!form.customer_id} title="เพิ่มผู้ประสานงาน">
+                    <QtIcon name="plus" size={16} />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {selectedCustomer && (
+              <div style={{ ...qtStyles.customerInfo, marginTop: 14 }}>
+                {selectedCustomer.tax_id && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <QtIcon name="hash" size={14} color="#94a3b8" />
+                    <span>{selectedCustomer.tax_id}{selectedCustomer.branch ? ` · สาขา: ${selectedCustomer.branch}` : ''}</span>
+                  </div>
+                )}
+                {selectedCustomer.address && (
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 4 }}>
+                    <QtIcon name="mapPin" size={14} color="#94a3b8" />
+                    <span>{selectedCustomer.address}{selectedCustomer.postal_code ? ` ${selectedCustomer.postal_code}` : ''}</span>
+                  </div>
+                )}
+                {selectedCustomer.phone && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <QtIcon name="phone" size={14} color="#94a3b8" />
+                    <span>{selectedCustomer.phone}</span>
+                  </div>
+                )}
+                {selectedCustomer.email && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <QtIcon name="mail" size={14} color="#94a3b8" />
+                    <span>{selectedCustomer.email}</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ===== Card: รายละเอียดเอกสาร ===== */}
+        <div style={qtStyles.card}>
+          <div style={qtStyles.cardHeader}>
+            <QtIcon name="receipt" size={14} color="#475569" />
+            รายละเอียดเอกสาร
+          </div>
+          <div style={qtStyles.cardBody}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 14 }}>
+              <div>
+                <label style={qtStyles.label}>วันที่</label>
+                <input type="date" style={qtStyles.input} value={form.issue_date}
+                  onChange={e => setForm(f => ({ ...f, issue_date: e.target.value }))} />
+              </div>
+              <div>
+                <label style={qtStyles.label}>ยืนราคา (วัน)</label>
+                <input type="number" style={qtStyles.input} value={form.valid_days}
+                  onChange={e => setForm(f => ({ ...f, valid_days: Number(e.target.value || 0) }))} />
+              </div>
+              <div>
+                <label style={qtStyles.label}>เครดิต (วัน)</label>
+                <input type="number" style={qtStyles.input} value={form.credit_days}
+                  onChange={e => setForm(f => ({ ...f, credit_days: Number(e.target.value || 0) }))} />
+              </div>
+              <div>
+                <label style={qtStyles.label}>พนักงานขาย</label>
+                <select style={qtStyles.input} value={form.salesperson_id || ''}
+                  onChange={e => setForm(f => ({ ...f, salesperson_id: e.target.value }))}>
+                  <option value="">— ไม่ระบุ —</option>
+                  {staffList.filter(s => s.status === 'active').map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.first_name_th} {s.last_name_th}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ gridColumn: 'span 2' }}>
+                <label style={qtStyles.label}>โปรเจค</label>
+                <input style={qtStyles.input} value={form.project_name}
+                  placeholder="ชื่อโครงการ"
+                  onChange={e => setForm(f => ({ ...f, project_name: e.target.value }))} />
+              </div>
+              <div>
+                <label style={qtStyles.label}>เลขที่อ้างอิง</label>
+                <input style={qtStyles.input} value={form.reference_no}
+                  placeholder="REF-XXXX"
+                  onChange={e => setForm(f => ({ ...f, reference_no: e.target.value }))} />
+              </div>
+              <div>
+                <label style={qtStyles.label}>ราคาสินค้า</label>
+                <select style={qtStyles.input} value={form.price_includes_vat ? 'incl' : 'excl'}
+                  onChange={e => setForm(f => ({ ...f, price_includes_vat: e.target.value === 'incl' }))}>
+                  <option value="excl">ไม่รวมภาษี</option>
+                  <option value="incl">รวมภาษีแล้ว</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ===== Card: รายการสินค้า/บริการ ===== */}
+        <div style={qtStyles.card}>
+          <div style={{ ...qtStyles.cardHeader, justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <QtIcon name="package" size={14} color="#475569" />
+              รายการสินค้า/บริการ
+              {form.items.length > 0 && (
+                <span style={{ fontSize: 11, color: '#94a3b8', textTransform: 'none', letterSpacing: 0 }}>
+                  ({form.items.length} รายการ)
+                </span>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 8, textTransform: 'none', letterSpacing: 0 }}>
+              <select style={{ ...qtStyles.input, width: 240, padding: '6px 10px', fontSize: 13 }}
+                value=""
+                onChange={e => { if (e.target.value) { addProductItem(e.target.value); e.target.value = ''; } }}>
+                <option value="">+ เพิ่มจากคลังสินค้า</option>
+                {products.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.product_code} — {p.name}
+                  </option>
+                ))}
+              </select>
+              <button style={{ ...qtStyles.btn, padding: '6px 12px', fontSize: 13 }} onClick={addFreeTextItem}>
+                <QtIcon name="plus" size={14} /> รายการพิเศษ
+              </button>
+            </div>
+          </div>
+          <div style={{ padding: form.items.length === 0 ? 20 : 0 }}>
+            {form.items.length === 0 ? (
+              <div style={{
+                padding: 36, textAlign: 'center', color: '#94a3b8',
+                background: '#f8fafc', borderRadius: 8, border: '1px dashed #cbd5e1',
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+              }}>
+                <QtIcon name="package" size={32} color="#cbd5e1" />
+                <div style={{ fontSize: 14 }}>ยังไม่มีรายการ</div>
+                <div style={{ fontSize: 12 }}>เพิ่มจากคลังสินค้า หรือ สร้างรายการพิเศษ</div>
+              </div>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead style={{ background: '#f8fafc' }}>
+                  <tr>
+                    <th style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: '#64748b', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '0.05em', width: 36 }}>#</th>
+                    <th style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: '#64748b', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '0.05em' }}>รายการ</th>
+                    <th style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: '#64748b', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '0.05em', width: 90 }}>จำนวน</th>
+                    <th style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: '#64748b', textAlign: 'left', textTransform: 'uppercase', letterSpacing: '0.05em', width: 80 }}>หน่วย</th>
+                    <th style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: '#64748b', textAlign: 'right', textTransform: 'uppercase', letterSpacing: '0.05em', width: 120 }}>ราคา/หน่วย</th>
+                    <th style={{ padding: '10px 12px', fontSize: 11, fontWeight: 600, color: '#64748b', textAlign: 'right', textTransform: 'uppercase', letterSpacing: '0.05em', width: 130 }}>รวม</th>
+                    <th style={{ padding: '10px 12px', width: 50 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {form.items.map((it, idx) => {
+                    const lineTotal = Number(it.quantity || 0) * Number(it.unit_price || 0);
+                    const isFreeText = !it.product_id;
+                    return (
+                      <tr key={idx} style={{
+                        ...(isFreeText ? qtStyles.freeTextRow : {}),
+                        borderTop: '1px solid #f1f5f9',
+                      }}>
+                        <td style={{ padding: '12px', fontSize: 13, color: '#94a3b8', verticalAlign: 'top' }}>{idx + 1}</td>
+                        <td style={{ padding: '10px 12px' }}>
+                          <input style={{ ...qtStyles.input, fontSize: 14, fontWeight: 600, marginBottom: 4 }}
+                            placeholder="ชื่อรายการ"
+                            value={it.product_name}
+                            onChange={e => updateItem(idx, 'product_name', e.target.value)} />
+                          {it.product_brand && (
+                            <div style={{ fontSize: 11, color: '#64748b', marginBottom: 4, padding: '0 2px' }}>
+                              {it.product_brand}{it.product_model ? ` · ${it.product_model}` : ''}
+                            </div>
+                          )}
+                          <textarea style={{ ...qtStyles.input, fontSize: 12, minHeight: 36, resize: 'vertical' }}
+                            placeholder="รายละเอียด / Scope of Services"
+                            value={it.description || ''}
+                            onChange={e => updateItem(idx, 'description', e.target.value)} />
+                          {isFreeText && (
+                            <div style={{ ...qtStyles.badge, marginTop: 6 }}>
+                              <QtIcon name="sparkles" size={10} color="#a16207" />
+                              รายการพิเศษ
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
+                          <input type="number" style={qtStyles.input} value={it.quantity}
+                            step="0.01"
+                            onChange={e => updateItem(idx, 'quantity', e.target.value)} />
+                        </td>
+                        <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
+                          <input style={qtStyles.input} value={it.unit || ''}
+                            onChange={e => updateItem(idx, 'unit', e.target.value)} />
+                        </td>
+                        <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
+                          <input type="number" style={{ ...qtStyles.input, textAlign: 'right' }}
+                            step="0.01" value={it.unit_price}
+                            onChange={e => updateItem(idx, 'unit_price', e.target.value)} />
+                        </td>
+                        <td style={{ padding: '10px 12px', textAlign: 'right', verticalAlign: 'top', fontSize: 14, fontWeight: 600, color: '#0f172a', ...qtStyles.monoNum }}>
+                          {fmt(lineTotal)}
+                        </td>
+                        <td style={{ padding: '10px 12px', verticalAlign: 'top' }}>
+                          <button style={qtStyles.btnDanger} onClick={() => removeItem(idx)} title="ลบรายการ">
+                            <QtIcon name="trash" size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+
+        {/* ===== Bottom: Notes + Summary ===== */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16, alignItems: 'start' }}>
+          {/* Notes card */}
+          <div style={qtStyles.card}>
+            <div style={qtStyles.cardHeader}>
+              <QtIcon name="fileText" size={14} color="#475569" />
+              หมายเหตุ
+            </div>
+            <div style={qtStyles.cardBody}>
+              <textarea style={{ ...qtStyles.input, minHeight: 200, resize: 'vertical' }}
+                placeholder="เช่น เงื่อนไขการชำระเงิน, ขอบเขตงานที่ไม่รวม"
+                value={form.notes}
+                onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+            </div>
+          </div>
+
+          {/* Summary card (sticky) */}
+          <div style={{ ...qtStyles.card, position: 'sticky', top: 88 }}>
+            <div style={qtStyles.cardHeader}>
+              <QtIcon name="receipt" size={14} color="#475569" />
+              สรุปยอด
+            </div>
+            <div style={qtStyles.cardBody}>
+              <QtSummaryRow label="รวมเป็นเงิน" value={fmt(subtotal)} />
+
+              {/* Discount toggle */}
+              <div style={{ display: 'flex', gap: 6, marginTop: 12, alignItems: 'center' }}>
+                <span style={{ flex: 1, fontSize: 13, color: '#64748b' }}>ส่วนลด</span>
+                <select style={{ ...qtStyles.input, width: 70, padding: '6px 8px', fontSize: 12 }}
+                  value={form.discount_mode}
+                  onChange={e => setForm(f => ({ ...f, discount_mode: e.target.value }))}>
+                  <option value="percent">%</option>
+                  <option value="amount">บาท</option>
+                </select>
+                {form.discount_mode === 'percent' ? (
+                  <input type="number" step="0.01" style={{ ...qtStyles.input, width: 70, textAlign: 'right', padding: '6px 8px', ...qtStyles.monoNum }}
+                    value={form.discount_percent}
+                    onChange={e => setForm(f => ({ ...f, discount_percent: Number(e.target.value || 0) }))} />
+                ) : (
+                  <input type="number" step="0.01" style={{ ...qtStyles.input, width: 90, textAlign: 'right', padding: '6px 8px', ...qtStyles.monoNum }}
+                    value={form.discount_amount}
+                    onChange={e => setForm(f => ({ ...f, discount_amount: Number(e.target.value || 0) }))} />
+                )}
+              </div>
+              <QtSummaryRow label="ส่วนลด" value={`-${fmt(discountAmount)}`} muted />
+              <div style={qtStyles.divider} />
+              <QtSummaryRow label="ราคาหลังส่วนลด" value={fmt(amountAfterDiscount)} />
+
+              <div style={{ display: 'flex', gap: 6, marginTop: 12, alignItems: 'center' }}>
+                <span style={{ flex: 1, fontSize: 13, color: '#64748b' }}>ภาษี</span>
+                <select style={{ ...qtStyles.input, width: 130, padding: '6px 8px', fontSize: 12 }}
+                  value={form.vat_rate}
+                  onChange={e => setForm(f => ({ ...f, vat_rate: Number(e.target.value) }))}>
+                  <option value={7}>VAT 7%</option>
+                  <option value={0}>ไม่มีภาษี</option>
+                </select>
+              </div>
+              <QtSummaryRow label={`ภาษีมูลค่าเพิ่ม ${vatRate}%`} value={fmt(vatAmount)} muted />
+
+              <div style={{ background: '#0f172a', color: '#fff', padding: '12px 14px', borderRadius: 8, marginTop: 12,
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 13, fontWeight: 500 }}>รวมทั้งสิ้น</span>
+                <span style={{ fontSize: 18, fontWeight: 700, ...qtStyles.monoNum }}>{fmt(grandTotal)}</span>
+              </div>
+
+              <div style={{ display: 'flex', gap: 6, marginTop: 14, alignItems: 'center' }}>
+                <span style={{ flex: 1, fontSize: 13, color: '#64748b' }}>หัก ณ ที่จ่าย</span>
+                <select style={{ ...qtStyles.input, width: 110, padding: '6px 8px', fontSize: 12 }}
+                  value={form.wht_rate}
+                  onChange={e => setForm(f => ({ ...f, wht_rate: Number(e.target.value) }))}>
+                  {QT_WHT_RATES.map(r => (
+                    <option key={r} value={r}>{r === '0' ? 'ไม่หัก' : `${r}%`}</option>
+                  ))}
+                </select>
+              </div>
+              {Number(form.wht_rate) > 0 && (
+                <>
+                  <QtSummaryRow label={`หัก ณ ที่จ่าย ${form.wht_rate}%`} value={`-${fmt(whtAmount)}`} muted />
+                  <div style={qtStyles.divider} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' }}>
+                    <span style={{ fontSize: 14, fontWeight: 600, color: '#0f172a' }}>ยอดชำระ</span>
+                    <span style={{ fontSize: 18, fontWeight: 700, color: '#0f172a', ...qtStyles.monoNum }}>{fmt(netPayable)}</span>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Modals */}
+      {showCustomerForm && (
+        <CustomerFormModal customer={null}
+          onClose={() => setShowCustomerForm(false)}
+          onSaved={() => {
+            setShowCustomerForm(false);
+            fetch('/api/customers', { headers: authHeaders() })
+              .then(r => r.json()).then(d => setCustomers(Array.isArray(d) ? d : []));
+          }} />
+      )}
+      {showContactForm && form.customer_id && (
+        <CustomerContactModal customerId={Number(form.customer_id)} contact={null}
+          onClose={() => setShowContactForm(false)}
+          onSaved={() => {
+            setShowContactForm(false);
+            fetch(`/api/customers/${form.customer_id}/contacts`, { headers: authHeaders() })
+              .then(r => r.json()).then(d => setContactsForCustomer(Array.isArray(d) ? d : []));
+          }} />
+      )}
+    </div>
+  );
+}
+
+function QtSummaryRow({ label, value, muted }) {
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', padding: '6px 0',
+      fontSize: 13, color: muted ? '#94a3b8' : '#0f172a',
+    }}>
+      <span>{label}</span>
+      <span style={{ fontVariantNumeric: 'tabular-nums', fontWeight: muted ? 400 : 500 }}>{value}</span>
+    </div>
+  );
+}
+
+/* ========== QT — Status Badge ========== */
+function QtStatusBadge({ status, size = 'normal' }) {
+  const map = {
+    draft:    { bg: '#f1f5f9', fg: '#475569', text: 'แบบร่าง',  icon: 'fileText' },
+    sent:     { bg: '#dbeafe', fg: '#1d4ed8', text: 'ส่งแล้ว',   icon: 'sparkles' },
+    accepted: { bg: '#d1fae5', fg: '#047857', text: 'ตอบรับ',    icon: 'sparkles' },
+    rejected: { bg: '#fee2e2', fg: '#b91c1c', text: 'ปฏิเสธ',    icon: 'x' },
+    expired:  { bg: '#f3e8ff', fg: '#6b21a8', text: 'หมดอายุ',  icon: 'clock' },
+  };
+  const s = map[status] || { bg: '#f1f5f9', fg: '#475569', text: status, icon: 'fileText' };
+  const padding = size === 'large' ? '6px 14px' : '4px 10px';
+  const fontSize = size === 'large' ? 13 : 11;
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 6,
+      padding, borderRadius: 6, fontSize, fontWeight: 600,
+      background: s.bg, color: s.fg,
+    }}>
+      <QtIcon name={s.icon} size={size === 'large' ? 14 : 12} color={s.fg} />
+      {s.text}
+    </span>
+  );
+}
+
+/* ========== QT — INVOICE-STYLE DETAIL PAGE (Phase 3.2A — Final) ========== */
+const QtInvoiceLayout = {
+  // Brand
+  navy: '#183b59',
+  navyDark: '#0f2438',
+  navyLight: '#2d5278',
+
+  // Backgrounds
+  pageBg: '#f1f5f9',
+  paperBg: '#ffffff',
+  rowAlt: '#f8fafc',
+
+  // Borders & text
+  borderStrong: '#cbd5e1',
+  borderSubtle: '#e2e8f0',
+  textHeading: '#0f172a',
+  textBody: '#334155',
+  textMuted: '#64748b',
+  textLight: '#94a3b8',
+};
+
+// Company info (consistent with PO PDF)
+const QT_COMPANY = {
+  name: 'บริษัท ไอเดีย เฮ้าส์ เซ็นเตอร์ จำกัด (สำนักงานใหญ่)',
+  address: 'เลขที่ 80 อาคาร เค.เอ.เอ็น.เพลส ห้องเลขที่ 104 ชั้น 1 ซอยนราธิวาสราชนครินทร์ 8 แขวงทุ่งวัดดอน เขตสาทร กรุงเทพฯ 10120',
+  taxId: '0105556022070',
+  phone: '02-003-8359, 02-003-8462',
+  mobile: '086-358-3354',
+  fax: '02-286-1932',
+  website: 'www.ideas-house.com',
+};
+
+function QuotationDetailPage() {
+  const navigate = useNavigate();
+  const { id } = useParams();
+  const [qt, setQt] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const [showStamp, setShowStamp] = React.useState(true);
+
+  const load = () => {
+    fetch(`/api/quotations/${id}`, { headers: authHeaders() })
+      .then(r => r.json()).then(setQt).catch(() => setQt(null));
+  };
+  React.useEffect(load, [id]);
+
+  const fmt = (n) => Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString('th-TH', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '-';
+
+  if (!qt) return <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>กำลังโหลด…</div>;
+  if (qt.error) return <div style={{ padding: 40, textAlign: 'center', color: '#d33' }}>{qt.error}</div>;
+
+  const eff = qt.effective_status || qt.status;
+  const C = QtInvoiceLayout;
+
+  const changeStatus = async (newStatus, label) => {
+    if (!confirm(`ยืนยัน${label} ใบเสนอราคา ${qt.quotation_no}?`)) return;
+    setBusy(true); setErr('');
+    try {
+      const res = await fetch(`/api/quotations/${id}/status`, {
+        method: 'PUT', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setErr(data.error || 'เปลี่ยนสถานะไม่สำเร็จ'); return; }
+      load();
+    } finally { setBusy(false); }
+  };
+
+  const remove = async () => {
+    if (!confirm(`ยืนยันลบใบเสนอราคา ${qt.quotation_no}?`)) return;
+    const res = await fetch(`/api/quotations/${id}`, { method: 'DELETE', headers: authHeaders() });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) navigate('/quotation');
+    else alert(data.error || 'ลบไม่สำเร็จ');
+  };
+
+  const statusInfo = {
+    draft:    { bg: '#f1f5f9', fg: '#475569', text: 'แบบร่าง' },
+    sent:     { bg: '#dbeafe', fg: '#1e40af', text: 'ส่งแล้ว' },
+    accepted: { bg: '#d1fae5', fg: '#047857', text: 'ตอบรับ'  },
+    rejected: { bg: '#fee2e2', fg: '#b91c1c', text: 'ปฏิเสธ'  },
+    expired:  { bg: '#f3e8ff', fg: '#6b21a8', text: 'หมดอายุ' },
+  }[eff] || { bg: '#f1f5f9', fg: '#475569', text: eff };
+
+  // Action buttons (ปุ่มควบคุม — แสดงด้านบนเอกสาร)
+  const actionBar = (
+    <div style={{
+      maxWidth: 900, margin: '0 auto 16px', padding: '12px 16px',
+      background: '#fff', borderRadius: 8, boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <button style={qtBtn('default')} onClick={() => navigate('/quotation')}>← กลับ</button>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: C.textBody, cursor: 'pointer', userSelect: 'none' }}>
+          <input type="checkbox" checked={showStamp} onChange={(e) => setShowStamp(e.target.checked)}
+            style={{ cursor: 'pointer', width: 16, height: 16 }} />
+          ใส่ตราประทับ
+        </label>
+        <span style={{ fontSize: 14, color: C.textMuted }}>สถานะ:</span>
+        <span style={{
+          padding: '4px 12px', borderRadius: 4, fontSize: 13, fontWeight: 600,
+          background: statusInfo.bg, color: statusInfo.fg,
+        }}>{statusInfo.text}</span>
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {qt.status === 'draft' && (
+          <button style={qtBtn('primary')} disabled={busy}
+            onClick={() => changeStatus('sent', 'ส่ง QT')}>📤 ส่ง QT</button>
+        )}
+        {qt.status === 'sent' && (
+          <>
+            <button style={qtBtn('success')} disabled={busy}
+              onClick={() => changeStatus('accepted', 'ลูกค้าตอบรับ')}>✓ ตอบรับ</button>
+            <button style={qtBtn('danger')} disabled={busy}
+              onClick={() => changeStatus('rejected', 'ลูกค้าปฏิเสธ')}>✕ ปฏิเสธ</button>
+            <button style={qtBtn('default')} disabled={busy}
+              onClick={() => changeStatus('draft', 'กลับเป็น draft')}>↺ Draft</button>
+          </>
+        )}
+        {(qt.status === 'accepted' || qt.status === 'rejected') && (
+          <button style={qtBtn('default')} disabled={busy}
+            onClick={() => changeStatus('sent', 'กลับเป็น ส่งแล้ว')}>↺ Sent</button>
+        )}
+        <button style={qtBtn('default')} onClick={() => navigate(`/quotation/${id}/edit`)}>แก้ไข</button>
+        <button style={qtBtn('danger')} onClick={remove}>ลบ</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ background: C.pageBg, minHeight: '100vh', padding: '20px 0 60px' }}>
+      {actionBar}
+      {err && (
+        <div style={{ maxWidth: 900, margin: '0 auto 16px', padding: '10px 16px',
+          background: '#fef2f2', color: '#b91c1c', borderRadius: 6, fontSize: 14, border: '1px solid #fecaca' }}>
+          {err}
+        </div>
+      )}
+
+      {/* ─────── INVOICE PAPER ─────── */}
+      <div style={{
+        maxWidth: 900, margin: '0 auto', background: C.paperBg,
+        boxShadow: '0 4px 20px rgba(15, 23, 42, 0.1), 0 1px 3px rgba(15, 23, 42, 0.05)',
+        padding: '32px 36px', position: 'relative',
+        fontFamily: 'inherit', color: C.textBody, fontSize: 13, lineHeight: 1.55,
+      }}>
+        {/* ===== HEADER ===== */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 24, paddingBottom: 16, borderBottom: `2px solid ${C.navy}` }}>
+          {/* Left: Company logo + info */}
+          <div>
+            <div style={{ marginBottom: 12 }}>
+              <img src="/logo.png" alt="IDEA HOUSE Center"
+                onError={(e) => { e.target.style.display = 'none'; }}
+                style={{ height: 80, width: 'auto', display: 'block' }} />
+            </div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.textHeading, marginBottom: 4 }}>{QT_COMPANY.name}</div>
+            <div style={{ fontSize: 11, color: C.textBody, lineHeight: 1.6 }}>
+              {QT_COMPANY.address}<br/>
+              เลขประจำตัวผู้เสียภาษี {QT_COMPANY.taxId} · โทร. {QT_COMPANY.phone}<br/>
+              มือถือ {QT_COMPANY.mobile} · โทรสาร {QT_COMPANY.fax} · {QT_COMPANY.website}
+            </div>
+          </div>
+
+          {/* Right: QT title + meta box */}
+          <div style={{ minWidth: 220, textAlign: 'right' }}>
+            <div style={{ fontSize: 26, fontWeight: 800, color: C.navy, lineHeight: 1, marginBottom: 4 }}>ใบเสนอราคา</div>
+            <div style={{ fontSize: 11, color: C.textMuted, letterSpacing: '0.15em', marginBottom: 14 }}>QUOTATION</div>
+            <table style={{ marginLeft: 'auto', fontSize: 12, borderCollapse: 'collapse' }}>
+              <tbody>
+                <tr><td style={qtMetaLabel}>เลขที่</td><td style={qtMetaVal}><strong style={{ color: C.navy }}>{qt.quotation_no}</strong></td></tr>
+                <tr><td style={qtMetaLabel}>วันที่</td><td style={qtMetaVal}>{fmtDate(qt.issue_date)}</td></tr>
+                <tr><td style={qtMetaLabel}>ยืนราคา</td><td style={qtMetaVal}>{qt.valid_days} วัน (ถึง {fmtDate(qt.valid_until)})</td></tr>
+                {qt.credit_days > 0 && <tr><td style={qtMetaLabel}>เครดิต</td><td style={qtMetaVal}>{qt.credit_days} วัน</td></tr>}
+                {qt.reference_no && <tr><td style={qtMetaLabel}>อ้างอิง</td><td style={qtMetaVal}>{qt.reference_no}</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* ===== CUSTOMER BLOCK ===== */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
+          {/* Customer info */}
+          <div style={{ border: `1px solid ${C.borderStrong}`, borderRadius: 4, padding: '10px 14px' }}>
+            <div style={{ fontSize: 10, color: C.textMuted, letterSpacing: '0.1em', marginBottom: 6, fontWeight: 600 }}>
+              ลูกค้า / CUSTOMER
+            </div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: C.textHeading, marginBottom: 4 }}>{qt.customer_name}</div>
+            <div style={{ fontSize: 11, color: C.textBody, lineHeight: 1.6 }}>
+              {qt.customer_address && <>{qt.customer_address}{qt.customer_postal_code ? ` ${qt.customer_postal_code}` : ''}<br/></>}
+              {qt.customer_tax_id && <>เลขประจำตัวผู้เสียภาษี {qt.customer_tax_id}{qt.customer_branch ? ` (${qt.customer_branch})` : ''}<br/></>}
+              {qt.customer_phone && <>โทร. {qt.customer_phone}{qt.customer_email ? ` · ${qt.customer_email}` : ''}</>}
+            </div>
+            {qt.contact_name && (
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${C.borderSubtle}`, fontSize: 11 }}>
+                <span style={{ color: C.textMuted }}>ผู้ติดต่อ: </span>
+                <strong style={{ color: C.textHeading }}>{qt.contact_name}</strong>
+                {qt.contact_position && <span style={{ color: C.textMuted }}> ({qt.contact_position})</span>}
+                {qt.contact_phone && <span> · {qt.contact_phone}</span>}
+              </div>
+            )}
+          </div>
+          {/* Project / Salesperson */}
+          <div style={{ border: `1px solid ${C.borderStrong}`, borderRadius: 4, padding: '10px 14px' }}>
+            <div style={{ fontSize: 10, color: C.textMuted, letterSpacing: '0.1em', marginBottom: 6, fontWeight: 600 }}>
+              รายละเอียด / DETAILS
+            </div>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+              <tbody>
+                {qt.project_name && (
+                  <tr><td style={qtDetailLabel}>โปรเจค</td><td style={qtDetailVal}>{qt.project_name}</td></tr>
+                )}
+                {qt.salesperson_first_name && (
+                  <tr><td style={qtDetailLabel}>พนักงานขาย</td><td style={qtDetailVal}>
+                    {qt.salesperson_first_name} {qt.salesperson_last_name || ''}
+                    {qt.salesperson_phone && <span style={{ color: C.textMuted }}> · {qt.salesperson_phone}</span>}
+                  </td></tr>
+                )}
+                <tr><td style={qtDetailLabel}>ราคาสินค้า</td><td style={qtDetailVal}>
+                  {qt.price_includes_vat ? 'รวมภาษีมูลค่าเพิ่มแล้ว' : 'ยังไม่รวมภาษีมูลค่าเพิ่ม'}
+                </td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* ===== ITEMS TABLE (with full borders) ===== */}
+        <table style={{
+          width: '100%', borderCollapse: 'collapse', marginTop: 16, fontSize: 12,
+          border: `1px solid ${C.borderStrong}`,
+        }}>
+          <thead>
+            <tr style={{ background: C.navy, color: '#fff' }}>
+              <th style={qtTh}>ที่</th>
+              <th style={{ ...qtTh, textAlign: 'left' }}>รายการ</th>
+              <th style={{ ...qtTh, width: 60, textAlign: 'right' }}>จำนวน</th>
+              <th style={{ ...qtTh, width: 60, textAlign: 'center' }}>หน่วย</th>
+              <th style={{ ...qtTh, width: 90, textAlign: 'right' }}>ราคา/หน่วย</th>
+              <th style={{ ...qtTh, width: 100, textAlign: 'right' }}>จำนวนเงิน</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(qt.items || []).map((it, idx) => {
+              const isFreeText = !it.product_id;
+              return (
+                <tr key={it.id} style={{ background: idx % 2 === 1 ? C.rowAlt : '#fff' }}>
+                  <td style={qtTd}>{idx + 1}</td>
+                  <td style={{ ...qtTd, textAlign: 'left' }}>
+                    <div style={{ fontWeight: 600, color: C.textHeading }}>{it.product_name}</div>
+                    {(it.product_brand || it.product_model) && (
+                      <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>
+                        {it.product_brand}{it.product_model ? ` · ${it.product_model}` : ''}
+                        {it.product_code ? ` · ${it.product_code}` : ''}
+                      </div>
+                    )}
+                    {it.description && (
+                      <div style={{ fontSize: 11, color: C.textBody, marginTop: 4, whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>{it.description}</div>
+                    )}
+                  </td>
+                  <td style={{ ...qtTd, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{Number(it.quantity).toLocaleString()}</td>
+                  <td style={{ ...qtTd, textAlign: 'center', color: C.textMuted }}>{it.unit || '-'}</td>
+                  <td style={{ ...qtTd, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmt(it.unit_price)}</td>
+                  <td style={{ ...qtTd, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>{fmt(it.total_price)}</td>
+                </tr>
+              );
+            })}
+            {/* Empty rows to fill (if items < 5) — เหมือน QT จริง */}
+            {Array.from({ length: Math.max(0, 5 - (qt.items || []).length) }).map((_, i) => (
+              <tr key={`empty-${i}`}>
+                <td style={qtTd}>&nbsp;</td>
+                <td style={qtTd}></td>
+                <td style={qtTd}></td>
+                <td style={qtTd}></td>
+                <td style={qtTd}></td>
+                <td style={qtTd}></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        {/* ===== NOTES + SUMMARY ===== */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 16, marginTop: 16 }}>
+          {/* Notes */}
+          <div style={{ border: `1px solid ${C.borderStrong}`, padding: '10px 14px', minHeight: 140 }}>
+            <div style={{ fontSize: 10, color: C.textMuted, letterSpacing: '0.1em', marginBottom: 6, fontWeight: 600 }}>
+              หมายเหตุ / REMARKS
+            </div>
+            <div style={{ fontSize: 11, color: C.textBody, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+              {qt.notes || '-'}
+            </div>
+          </div>
+
+          {/* Summary */}
+          <div style={{ border: `1px solid ${C.borderStrong}` }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <tbody>
+                <tr><td style={qtSumLabel}>รวมเป็นเงิน</td><td style={qtSumVal}>{fmt(qt.subtotal)}</td></tr>
+                {Number(qt.discount_amount) > 0 && (
+                  <tr style={{ color: C.textMuted }}>
+                    <td style={qtSumLabel}>{qt.discount_mode === 'percent' ? `ส่วนลด ${qt.discount_percent}%` : 'ส่วนลด'}</td>
+                    <td style={qtSumVal}>-{fmt(qt.discount_amount)}</td>
+                  </tr>
+                )}
+                <tr style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
+                  <td style={qtSumLabel}>ราคาหลังส่วนลด</td><td style={qtSumVal}>{fmt(qt.amount_after_discount)}</td>
+                </tr>
+                <tr><td style={qtSumLabel}>ภาษีมูลค่าเพิ่ม {qt.vat_rate}%</td><td style={qtSumVal}>{fmt(qt.vat_amount)}</td></tr>
+                <tr style={{ background: C.navy, color: '#fff' }}>
+                  <td style={{ ...qtSumLabel, color: '#fff', fontWeight: 700, fontSize: 13 }}>จำนวนเงินรวมทั้งสิ้น</td>
+                  <td style={{ ...qtSumVal, color: '#fff', fontWeight: 700, fontSize: 14 }}>{fmt(qt.grand_total)}</td>
+                </tr>
+                {Number(qt.wht_rate) > 0 && (
+                  <>
+                    <tr style={{ color: C.textMuted }}>
+                      <td style={qtSumLabel}>หัก ณ ที่จ่าย {qt.wht_rate}%</td>
+                      <td style={qtSumVal}>-{fmt(qt.wht_amount)}</td>
+                    </tr>
+                    <tr style={{ background: '#f1f5f9' }}>
+                      <td style={{ ...qtSumLabel, fontWeight: 700 }}>ยอดชำระ</td>
+                      <td style={{ ...qtSumVal, fontWeight: 700, fontSize: 14 }}>{fmt(qt.net_payable)}</td>
+                    </tr>
+                  </>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* ===== SIGNATURE BLOCKS ===== */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginTop: 36, paddingTop: 16 }}>
+          {/* Customer signature */}
+          <div style={{ textAlign: 'center', padding: '0 16px' }}>
+            <div style={{ height: 60, marginBottom: 6 }}></div>
+            <div style={{ borderTop: `1px solid ${C.textBody}`, paddingTop: 6, fontSize: 11, color: C.textBody }}>
+              ลงนามผู้อนุมัติ / ลูกค้า
+            </div>
+            <div style={{ fontSize: 10, color: C.textMuted, marginTop: 4 }}>
+              วันที่ ............................
+            </div>
+          </div>
+
+          {/* Company signature with stamp at left edge (toggle-able) */}
+          <div style={{ textAlign: 'center', padding: '0 16px', position: 'relative' }}>
+            {/* Stamp pinned to left — leaves room for signature in center */}
+            {showStamp && (
+              <img src="/stamp.png" alt="ตราประทับ"
+                onError={(e) => { e.target.style.display = 'none'; }}
+                style={{
+                  position: 'absolute',
+                  left: 8,
+                  top: -8,
+                  maxHeight: 95,
+                  maxWidth: 170,
+                  mixBlendMode: 'multiply',
+                  opacity: 0.92,
+                  transform: 'rotate(-6deg)',
+                  pointerEvents: 'none',
+                }} />
+            )}
+            <div style={{ height: 60, marginBottom: 6 }}></div>
+            <div style={{ borderTop: `1px solid ${C.textBody}`, paddingTop: 6, fontSize: 11, color: C.textBody }}>
+              ลงนามผู้ออกเอกสาร / บริษัท
+            </div>
+            <div style={{ fontSize: 10, color: C.textMuted, marginTop: 4 }}>
+              วันที่ {fmtDate(qt.issue_date)}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{ marginTop: 28, paddingTop: 12, borderTop: `1px dashed ${C.borderSubtle}`,
+          textAlign: 'center', fontSize: 10, color: C.textLight, letterSpacing: '0.05em' }}>
+          เอกสารนี้สร้างโดยระบบอัตโนมัติ · IDEA HOUSE Sales System
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const qtBtn = (variant) => ({
+  padding: '8px 16px', fontSize: 13, fontWeight: 600,
+  border: '1px solid', borderRadius: 6, cursor: 'pointer',
+  display: 'inline-flex', alignItems: 'center', gap: 6,
+  ...(variant === 'primary' ? { background: '#183b59', color: '#fff', borderColor: '#183b59' }
+   : variant === 'success' ? { background: '#10b981', color: '#fff', borderColor: '#10b981' }
+   : variant === 'danger'  ? { background: '#fff', color: '#dc2626', borderColor: '#fecaca' }
+   : { background: '#fff', color: '#475569', borderColor: '#e2e8f0' }),
+});
+
+const qtMetaLabel = { padding: '2px 12px 2px 0', color: '#64748b', textAlign: 'right', fontSize: 11 };
+const qtMetaVal = { padding: '2px 0', color: '#0f172a', textAlign: 'left', fontSize: 12 };
+const qtDetailLabel = { padding: '3px 8px 3px 0', color: '#64748b', verticalAlign: 'top', width: 80 };
+const qtDetailVal = { padding: '3px 0', color: '#0f172a' };
+const qtTh = { padding: '8px 6px', fontSize: 11, fontWeight: 600, textAlign: 'center', border: '1px solid #cbd5e1' };
+const qtTd = { padding: '8px 6px', fontSize: 12, textAlign: 'center', border: '1px solid #cbd5e1', verticalAlign: 'top' };
+const qtSumLabel = { padding: '6px 12px', textAlign: 'left', borderRight: '1px solid #e2e8f0', fontSize: 12 };
+const qtSumVal = { padding: '6px 12px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontSize: 13, color: '#0f172a' };
 
 function PurchaseOrderPage() {
   const [orders, setOrders] = React.useState([]);

@@ -1,4 +1,149 @@
 [ paste เนื้อหา CHANGELOG_phase_3.1_entry.md ทั้งหมดที่นี่ ]
+## [Phase 3.2A — Quotation CRUD + Invoice-Style Detail] — 2026-05-03
+
+### Added
+
+#### 📋 Quotation Module — Database
+- **`migration_phase_3.2A.sql`** — 2 ตารางใหม่:
+  - **`quotations`** (27 columns):
+    - `quotation_no` UNIQUE — auto-gen รูปแบบ `QT202605****` (YYYYMM + 4-digit running, reset รายเดือน)
+    - `valid_until` (issue_date + valid_days) แยกจาก `credit_days` — สอดคล้อง business semantic
+    - `discount_mode` ('percent' | 'amount') + `discount_percent` + `discount_amount` — เลือกได้
+    - `vat_rate` (default 7.00) + `vat_amount` + `wht_rate` + `wht_amount`
+    - Computed cache: `subtotal`, `amount_after_discount`, `grand_total`, `net_payable`
+    - `price_includes_vat` BOOL — รองรับทั้ง inclusive/exclusive
+    - FKs: `customer_id` (RESTRICT), `contact_id` (SET NULL), `salesperson_id` (SET NULL), `created_by` (SET NULL)
+    - Status: `draft / sent / accepted / rejected` (DB stored) + `expired` (computed on-read)
+  - **`quotation_items`** (13 columns):
+    - `product_id` **NULLABLE** — รองรับ free-text items + snapshot ทุก field (`product_name`, `product_brand`, `product_model`, `description`, `unit`)
+    - **Late binding pattern** — QT รับ free-text ได้ทันทีตอน sales กรอก ไม่ต้องสร้าง product master ก่อน
+    - SO stage (Phase 3.3) จะมี mapping dialog บังคับให้ map free-text → real product ก่อน stock cut
+- 5 indexes บน `quotations` + 2 บน `quotation_items`
+
+#### 📋 Quotation Module — Backend
+- **route `quotations.js`** — 7 endpoints:
+  - `GET /api/quotations` — list with filter + customer/salesperson joins
+  - `GET /api/quotations/:id` — detail with items + customer + contact + salesperson
+  - `POST /api/quotations` — create (transactional with items)
+  - `PUT/PATCH /api/quotations/:id` — update (alias) per lesson 10.11
+  - `PUT /api/quotations/:id/status` — workflow transition
+  - `DELETE /api/quotations/:id`
+- **Server-authoritative `computeAmounts()`** — คำนวณ subtotal/discount/VAT/WHT/grand_total ทั้งหมดที่ server (frontend แสดง preview เท่านั้น)
+- **`genQuotationNumber()`** — scan-last + increment per YYYYMM (ตาม PO pattern)
+- **`effectiveStatus()`** — compute 'expired' on-read โดยไม่บันทึก DB (status='sent' + valid_until ผ่านไปแล้ว = expired)
+- **Status validation** — บล็อก 'expired' ใน status update endpoint (เพราะ computed only)
+
+#### 🎨 Quotation Module — Frontend (Modern UI + Invoice-Style)
+- **เมนู "🧾 ใบเสนอราคา" ใน sidebar** — ระหว่าง ลูกค้า กับ คลังสินค้า
+- **Routes:** `/quotation`, `/quotation/new`, `/quotation/:id`, `/quotation/:id/edit`
+- **`QuotationListPage`** — search + filter + status badges + footer total
+- **`QuotationFormPage`** (Modern UI):
+  - Card sections + sticky top bar + outlined SVG icons (Lucide-style)
+  - Customer dropdown auto-fills primary contact + tax_id + address + phone + email
+  - "+ เพิ่มจากคลังสินค้า" dropdown product (search code/name/brand)
+  - "+ รายการพิเศษ" — free-text item (yellow gradient + left border + ✨ badge)
+  - Discount toggle %/บาท · VAT toggle · WHT select 0/1/2/3/5/10/15
+  - Sticky summary panel — preview ทุกค่าใน real-time
+  - Reuse existing `CustomerFormModal` + `CustomerContactModal` (modal-on-modal z-index)
+- **`QuotationDetailPage`** — **ใบเสมือนจริง (invoice-style)**:
+  - Header 2-column: Logo + ชื่อบริษัท + ที่อยู่ ซ้าย / "ใบเสนอราคา QUOTATION" + meta box ขวา
+  - Customer block + Project/Salesperson block (2 columns + borders)
+  - Items table — ขอบทุกช่อง + zebra rows + navy header + แถวว่าง padding ถึง 5 แถว
+  - Summary panel — navy "จำนวนเงินรวมทั้งสิ้น" row + WHT optional
+  - Notes box bordered
+  - Signature footer 2-column: ผู้อนุมัติ/ลูกค้า ซ้าย · ผู้ออกเอกสาร/บริษัท ขวา (มี stamp)
+  - **Toggle "☑ ใส่ตราประทับ"** ใน action bar — กดเปิด/ปิดตราได้อิสระ (default = เปิด, ไม่บันทึก DB)
+  - Stamp ริมซ้ายของ box ลงนาม (rotate -6deg, mix-blend-mode: multiply) — เหลือพื้นที่กลางสำหรับลายเซ็นจริง
+  - Status workflow buttons (ส่ง/ตอบรับ/ปฏิเสธ/back-to-draft)
+
+#### 🎨 Brand Identity
+- **Logo file** — `frontend/public/logo.png` (extracted + cropped จาก source logo) ใช้ใน Detail header
+- **Stamp file** — `frontend/public/stamp.png` (ตราประทับบริษัท) ใช้ใน Detail signature box ผ่าน CSS `mix-blend-mode: multiply` (พื้น JPG ขาว/เทา ซึมหายไปเอง — ไม่ต้อง process alpha)
+- **Brand color update ทั่วระบบ:** `#1e3a5f` → `#183b59` (extracted จาก logo dominant color, 56 occurrences) + `#2d5a87` → `#2d5278` (gradient secondary)
+- **Hardcoded company info** ใน Detail page (consistent กับ PO PDF):
+  - บริษัท ไอเดีย เฮ้าส์ เซ็นเตอร์ จำกัด (สำนักงานใหญ่)
+  - ที่อยู่/Tax ID/โทร/มือถือ/โทรสาร/website (เอกสารเดียวกับ `purchaseOrders.js`)
+
+### Lesson Learned
+
+1. **Free-text items แบบ late binding** — แทนที่จะบังคับสร้าง product ก่อน → QT รับ free-text ทันที + snapshot ทุก field → SO stage ค่อย bind กับ product จริงก่อน stock cut → เร็วและตรง business reality (sales กรอกใบเสนอเร็วๆ ก่อน)
+2. **Server-authoritative computation** — frontend คำนวณ preview เท่านั้น, server ทำซ้ำตอน save → ป้องกัน manipulation + เลข tally กันได้แม้ frontend bug
+3. **Computed status (`expired`) ไม่ต้องเก็บ DB** — `effectiveStatus()` ตอน read ก็พอ, ไม่ต้อง cron job → ลด moving parts
+4. **Patch script — verify schema columns ก่อนเขียน JOIN** — staff ใช้ `first_name_th/last_name_th` ไม่ใช่ `first_name/last_name`, phone อยู่ที่ `staff_contact.mobile_phone` (separate FK table) — เคยพลาดและ debug นาน
+5. **Patch end anchor — ใช้ function name ไม่ใช่ comment** — ตอน redesign Detail page เคยใช้ next `/* ===== ` เป็น end → กิน `PurchaseOrderPage` หายเลย → แก้เป็น `function PurchaseOrderPage()` ปลอดภัยกว่า
+6. **iframe rebuild verify** — patch ผ่าน, จอ user ไม่เปลี่ยน เพราะ container ไม่ rebuild → ต้อง `docker rmi` ก่อน `up --build` ทุกครั้ง (Docker layer cache)
+7. **State pattern unique per component** — ใช้ `[busy, setBusy] + [err, setErr]` 2 บรรทัด → ปรากฏ 5+ ครั้งในไฟล์ → patch fail "FOUND 3 TIMES" → แก้ใช้ context unique เช่น `[qt, setQt] + [busy] + [err]` 3 บรรทัดติดกัน
+8. **CSS mix-blend-mode: multiply** — JPG พื้นทึบใช้ในใบ HTML ได้สวย ไม่ต้องลบพื้นด้วย Pillow → simpler + ผลดีกว่า (no edge artifacts)
+9. **Toggle UX state in component, not DB** — feature flag กลับด้านได้บ่อยๆ ไม่จำเป็นต้องบันทึก → React state พอ + ไม่ต้อง migration
+
+### Pending (Phase 3.2B)
+- PDF Export — WeasyPrint pattern (font Sarabun, scripts `backend/src/utils/generate_quotation_pdf.py`)
+- Email send — แนบ PDF ไปยัง customer email
+
+## [Phase 3.1 — Customer Master + Contacts + Documents] — 2026-05-03
+
+### Added
+
+#### 🏢 Customer Master
+- **DB:** ตาราง `customers` ใหม่ (14 columns)
+  - Auto-gen `customer_code` รูปแบบ `CUS-0001` (sequence `customer_code_seq`)
+  - Partial unique index `uq_customers_tax_id` — `tax_id` UNIQUE เฉพาะที่ไม่ใช่ null/empty
+  - FK `created_by → users` (ON DELETE SET NULL)
+- **DB:** ตาราง `customer_contacts` ใหม่ (1 customer = many contacts)
+  - Partial unique index `uq_customer_contacts_one_primary` — บังคับ 1 customer = 1 primary
+  - FK `customer_id → customers` (ON DELETE CASCADE)
+- **Backend:** route ใหม่ `customers.js` — 10 endpoints:
+  - **Customers:** GET (list/by-id) + POST + PUT/PATCH (alias) + DELETE
+  - **Contacts:** GET list + POST + PUT + DELETE per customer
+  - Auto-set `is_primary=TRUE` ตอน contact แรก
+  - Auto-reassign primary ตอนลบ primary contact
+  - tax_id duplicate check ที่ application level (message ชัดกว่า DB error)
+- **Frontend `App.jsx`:**
+  - เพิ่มเมนู "🏢 ลูกค้า" ใน sidebar
+  - `CustomersPage`: list + search + filter active
+  - `CustomerFormModal`: create/edit (10 fields)
+  - `CustomerDetailModal`: customer info + contacts table + ★ toggle primary
+  - `CustomerContactModal`: add/edit contacts (z-index 10001 — modal-on-modal)
+
+#### 📎 Customer Documents (Phase 3.1.1)
+- **DB:** ตาราง `customer_documents` ใหม่ (9 columns)
+  - FK `customer_id` ON DELETE CASCADE / `uploaded_by` ON DELETE SET NULL
+- **Backend:** เพิ่ม 4 endpoints + multer config
+  - `GET    /api/customers/:id/documents`
+  - `POST   /api/customers/:id/documents` (multipart, max 20 MB)
+  - `GET    /api/customers/:id/documents/:docId/download`
+  - `DELETE /api/customers/:id/documents/:docId`
+- **Multer:** `.pdf, .jpg, .jpeg, .png, .doc, .docx, .xls, .xlsx`, 20 MB/ไฟล์
+- **Storage:** `/app/uploads/customers/{customer_id}/` (volume `uploads_data` เดิม)
+- **Frontend `CustomerDocumentsSection`** (component ใหม่ ใน `CustomerDetailModal`):
+  - Pending file preview (yellow box) — ให้กรอก notes ก่อนยืนยันแนบ
+  - Table แสดงไฟล์ + icon ตาม mime (🖼️/📄/📝/📊/📎)
+  - Format ขนาดไฟล์ (B/KB/MB)
+  - Click ชื่อไฟล์ = preview/download (`?t=` token query)
+  - ไม่มีหมวดหมู่ — ใช้ field `notes` อธิบายแทน
+
+### Changed
+
+#### 📁 Repository Hygiene
+- **`.gitignore`:** track migrations ใน `db/migrations/` แทนที่จะ ignore ทั้งหมด
+  - เดิม: `migration_*.sql` กิน pattern ทุก path → migrations ไม่ถูก commit เลย
+  - ใหม่: ignore `migration_*.sql` ที่ root (throwaway) แต่ negate `!db/migrations/*.sql`
+  - เหตุผล: reproducibility — clone repo + รัน migrations ทั้งหมด → ได้ DB schema ครบ
+- **เพิ่ม `db/migrations/`** เข้า repo:
+  - `migration_phase_2.14.sql` (brand + product_images — เคยไม่ได้ commit)
+  - `migration_customer_documents.sql`
+  - `migration_phase_3.1.sql`
+
+### Lesson Learned
+
+1. **ระวัง gitignore pattern กว้าง** — `migration_*.sql` ที่ตั้งไว้ Phase 2.10 เพื่อกัน throwaway ที่ root → กิน Phase 2.14 ลงไปด้วย ตรวจไม่เจอเพราะ `git status` clean → migrations หายจาก repo
+2. **Modal-on-modal ต้อง z-index สูงกว่า** — `CustomerContactModal` ใช้ `zIndex: 10001` เพราะเปิดทับ `CustomerDetailModal`
+3. **Application-level duplicate check ดีกว่า DB error** — ตรวจ tax_id ก่อน insert → message ชัด เช่น `"เลขผู้เสียภาษีนี้มีอยู่แล้ว (CUS-0001 — บริษัท XYZ)"` แทน generic `unique constraint violation`
+4. **Auto-set primary บน contact แรก** — ลด friction (เพิ่ม contact ครั้งแรก → ไม่ต้องกด primary เอง)
+5. **PATCH alias สำหรับ PUT** — ตามบทเรียน Phase 2 (section 10.11) — กัน method mismatch
+6. **File icon ตาม mime + extension** — UX ดีกว่าโชว์ icon เดียว แยก type ได้ในตาราง
+7. **Smoke test API ครบก่อนทำ Frontend** — Phase 3.1 step 2 (curl test ครบ 5 case) → step 3 ทำได้ลื่นไม่ต้อง debug backend
+
 ## [Phase 2.14 — Brand + Product Images + Detail UX] — 2026-05-03
 
 ### Added
