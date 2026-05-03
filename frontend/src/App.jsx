@@ -112,6 +112,7 @@ const menuItems = [
   { key: 'dashboard', icon: '📊', label: 'Dashboard' },
   { key: 'staff', icon: '👥', label: 'Staff Management' },
   { key: 'payroll', icon: '💰', label: 'Payroll' },
+  { key: 'customers', icon: '🏢', label: 'ลูกค้า' },
   { key: 'stock', icon: '📦', label: 'คลังสินค้า' },
   { key: 'purchase', icon: '🛒', label: 'ใบสั่งซื้อ' },
   { key: 'withholding', icon: '📄', label: 'หัก ณ ที่จ่าย' },
@@ -1062,6 +1063,7 @@ function AppInner() {
               {page === 'staff' && !selectedStaffId && <StaffListPage staffList={staffList} onSelect={setSelectedStaffId} onRefresh={loadStaff} />}
               {page === 'staff' && selectedStaffId && <StaffDetailPage staffId={selectedStaffId} onBack={() => setSelectedStaffId(null)} onRefresh={loadStaff} />}
               {page === 'payroll' && <PayrollPage />}
+              {page === 'customers' && <CustomersPage />}
               {page === 'stock' && <StockPage />}
               {page === 'withholding' && <WithholdingTaxPage />}
               {page === 'users' && <UserManagementPage staffList={staffList} />}
@@ -2798,6 +2800,617 @@ function CategoriesTab({ categories, onReload }) {
 /* ============================================================
    PURCHASE ORDER PAGE
 ============================================================ */
+/* ========== CUSTOMERS PAGE (Phase 3.1) ========== */
+function CustomersPage() {
+  const [customers, setCustomers] = React.useState([]);
+  const [search, setSearch] = React.useState('');
+  const [filterActive, setFilterActive] = React.useState('');
+  const [showForm, setShowForm] = React.useState(false);
+  const [editCustomer, setEditCustomer] = React.useState(null);
+  const [detailCustomer, setDetailCustomer] = React.useState(null);
+
+  const load = () => {
+    const params = new URLSearchParams();
+    if (search) params.append('search', search);
+    if (filterActive) params.append('is_active', filterActive);
+    const qs = params.toString();
+    fetch(`/api/customers${qs ? '?' + qs : ''}`, { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => setCustomers(Array.isArray(d) ? d : []))
+      .catch(() => setCustomers([]));
+  };
+  React.useEffect(load, [search, filterActive]);
+
+  const remove = async (c) => {
+    if (!confirm(`ยืนยันลบลูกค้า ${c.customer_code} — ${c.name}?`)) return;
+    const res = await fetch(`/api/customers/${c.id}`, {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) load();
+    else alert(data.error || 'ลบไม่สำเร็จ');
+  };
+
+  return (
+    <div>
+      <div style={styles.pageHeader}>
+        <div style={styles.pageTitle}>🏢 ลูกค้า</div>
+        <button style={styles.btn('primary')}
+          onClick={() => { setEditCustomer(null); setShowForm(true); }}>
+          + เพิ่มลูกค้า
+        </button>
+      </div>
+
+      <div style={styles.card}>
+        <div style={styles.searchBar}>
+          <input style={styles.searchInput}
+            placeholder="ค้นหา รหัส / ชื่อ / เลขผู้เสียภาษี / เบอร์โทร"
+            value={search} onChange={e => setSearch(e.target.value)} />
+          <select style={{ ...styles.searchInput, flex: 'none', width: 160 }}
+            value={filterActive} onChange={e => setFilterActive(e.target.value)}>
+            <option value="">ทั้งหมด</option>
+            <option value="true">ใช้งานอยู่</option>
+            <option value="false">ปิดใช้งาน</option>
+          </select>
+        </div>
+
+        <table style={styles.table}>
+          <thead>
+            <tr>
+              <th style={styles.th}>รหัส</th>
+              <th style={styles.th}>ชื่อบริษัท</th>
+              <th style={styles.th}>เลขผู้เสียภาษี</th>
+              <th style={styles.th}>สาขา</th>
+              <th style={styles.th}>ผู้ประสานงาน</th>
+              <th style={styles.th}>เบอร์</th>
+              <th style={styles.th}>สถานะ</th>
+              <th style={styles.th}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {customers.map(c => (
+              <tr key={c.id} style={styles.trHover}>
+                <td style={styles.td}>
+                  <a style={{ color: '#2563eb', textDecoration: 'underline', cursor: 'pointer' }}
+                     onClick={() => setDetailCustomer(c)}>{c.customer_code}</a>
+                </td>
+                <td style={styles.td}>{c.name}</td>
+                <td style={styles.td}>{c.tax_id || '-'}</td>
+                <td style={styles.td}>{c.branch || '-'}</td>
+                <td style={styles.td}>
+                  {c.primary_contact
+                    ? <span>{c.primary_contact.name} {c.contact_count > 1 && <span style={{ color: '#888', fontSize: 12 }}>(+{c.contact_count - 1})</span>}</span>
+                    : <span style={{ color: '#9ca3af', fontSize: 12 }}>-</span>}
+                </td>
+                <td style={styles.td}>{c.phone || '-'}</td>
+                <td style={styles.td}>
+                  {c.is_active
+                    ? <span style={styles.badge('green')}>ใช้งาน</span>
+                    : <span style={styles.badge('red')}>ปิด</span>}
+                </td>
+                <td style={styles.td}>
+                  <button style={{ ...styles.btn(), padding: '4px 10px', fontSize: 12, marginRight: 4 }}
+                    onClick={() => { setEditCustomer(c); setShowForm(true); }}>แก้ไข</button>
+                  <button style={{ ...styles.btn('danger'), padding: '4px 10px', fontSize: 12 }}
+                    onClick={() => remove(c)}>ลบ</button>
+                </td>
+              </tr>
+            ))}
+            {customers.length === 0 && (
+              <tr><td style={{ ...styles.td, textAlign: 'center', color: '#888', padding: 30 }} colSpan="8">
+                ยังไม่มีลูกค้า — กด "+ เพิ่มลูกค้า" เพื่อเริ่มต้น
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {showForm && (
+        <CustomerFormModal customer={editCustomer}
+          onClose={() => setShowForm(false)}
+          onSaved={() => { setShowForm(false); load(); }} />
+      )}
+      {detailCustomer && (
+        <CustomerDetailModal customer={detailCustomer}
+          onClose={() => { setDetailCustomer(null); load(); }} />
+      )}
+    </div>
+  );
+}
+
+/* ========== CUSTOMER FORM MODAL ========== */
+function CustomerFormModal({ customer, onClose, onSaved }) {
+  const [form, setForm] = React.useState(customer || {
+    name: '', tax_id: '', branch: '', address: '', postal_code: '',
+    phone: '', email: '', notes: '', is_active: true,
+  });
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+
+  const save = async () => {
+    setErr('');
+    if (!form.name || !form.name.trim()) { setErr('กรุณากรอกชื่อบริษัท'); return; }
+    setBusy(true);
+    try {
+      const url = customer ? `/api/customers/${customer.id}` : '/api/customers';
+      const method = customer ? 'PUT' : 'POST';
+      const res = await fetch(url, {
+        method, headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json();
+      if (!res.ok) { setErr(data.error || 'บันทึกไม่สำเร็จ'); return; }
+      onSaved();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={styles.overlay}>
+      <div style={{ ...styles.modal, width: 720 }} onClick={e => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <div style={styles.modalTitle}>
+            {customer ? `แก้ไขลูกค้า — ${customer.customer_code}` : 'เพิ่มลูกค้า'}
+          </div>
+          <button style={{ ...styles.btn(), padding: '4px 10px' }} onClick={onClose}>✕</button>
+        </div>
+        <div style={styles.modalBody}>
+          {err && <div style={styles.error}>{err}</div>}
+          <div style={styles.formGrid}>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={styles.label}>ชื่อบริษัท *</label>
+              <input style={styles.input} value={form.name || ''}
+                onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div>
+              <label style={styles.label}>เลขผู้เสียภาษี</label>
+              <input style={styles.input} value={form.tax_id || ''}
+                onChange={e => setForm(f => ({ ...f, tax_id: e.target.value }))} />
+            </div>
+            <div>
+              <label style={styles.label}>สาขา</label>
+              <input style={styles.input} value={form.branch || ''}
+                placeholder="สำนักงานใหญ่ / 00001"
+                onChange={e => setForm(f => ({ ...f, branch: e.target.value }))} />
+            </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={styles.label}>ที่อยู่</label>
+              <textarea style={{ ...styles.input, minHeight: 70, resize: 'vertical' }}
+                value={form.address || ''}
+                onChange={e => setForm(f => ({ ...f, address: e.target.value }))} />
+            </div>
+            <div>
+              <label style={styles.label}>รหัสไปรษณีย์</label>
+              <input style={styles.input} value={form.postal_code || ''}
+                onChange={e => setForm(f => ({ ...f, postal_code: e.target.value }))} />
+            </div>
+            <div>
+              <label style={styles.label}>เบอร์โทร (บริษัท)</label>
+              <input style={styles.input} value={form.phone || ''}
+                onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
+            </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={styles.label}>Email</label>
+              <input style={styles.input} value={form.email || ''}
+                onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
+            </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={styles.label}>หมายเหตุ</label>
+              <textarea style={{ ...styles.input, minHeight: 50, resize: 'vertical' }}
+                value={form.notes || ''}
+                onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+            </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input type="checkbox" checked={form.is_active !== false}
+                  onChange={e => setForm(f => ({ ...f, is_active: e.target.checked }))} />
+                <span>ใช้งานอยู่ (active)</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div style={styles.modalFooter}>
+          <button style={styles.btn()} onClick={onClose} disabled={busy}>ยกเลิก</button>
+          <button style={styles.btn('primary')} onClick={save} disabled={busy}>
+            {busy ? 'กำลังบันทึก…' : 'บันทึก'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ========== CUSTOMER DETAIL MODAL (รวม contacts) ========== */
+function CustomerDetailModal({ customer, onClose }) {
+  const [contacts, setContacts] = React.useState([]);
+  const [showContactForm, setShowContactForm] = React.useState(false);
+  const [editContact, setEditContact] = React.useState(null);
+
+  const load = () => {
+    fetch(`/api/customers/${customer.id}/contacts`, { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => setContacts(Array.isArray(d) ? d : []))
+      .catch(() => setContacts([]));
+  };
+  React.useEffect(load, [customer.id]);
+
+  const setPrimary = async (cid) => {
+    const res = await fetch(`/api/customers/${customer.id}/contacts/${cid}`, {
+      method: 'PUT', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_primary: true }),
+    });
+    if (res.ok) load();
+  };
+
+  const removeContact = async (cid) => {
+    if (!confirm('ยืนยันลบผู้ประสานงานคนนี้?')) return;
+    const res = await fetch(`/api/customers/${customer.id}/contacts/${cid}`, {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    if (res.ok) load(); else alert('ลบไม่สำเร็จ');
+  };
+
+  return (
+    <div style={styles.overlay} onClick={onClose}>
+      <div style={{ ...styles.modal, width: 900 }} onClick={e => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <div>
+            <div style={styles.modalTitle}>{customer.customer_code} — {customer.name}</div>
+            <div style={{ ...styles.detailSub, marginTop: 4 }}>
+              {customer.tax_id ? `เลขผู้เสียภาษี: ${customer.tax_id}` : 'ไม่มีเลขผู้เสียภาษี'}
+              {customer.branch ? ` · สาขา: ${customer.branch}` : ''}
+            </div>
+          </div>
+          <button style={{ ...styles.btn(), padding: '4px 10px' }} onClick={onClose}>✕</button>
+        </div>
+        <div style={styles.modalBody}>
+          {/* Customer info recap */}
+          <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: '12px 16px', marginBottom: 18 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', rowGap: 6, fontSize: 14 }}>
+              <div style={{ color: '#888' }}>ที่อยู่:</div>
+              <div>{customer.address || '-'}{customer.postal_code ? ` ${customer.postal_code}` : ''}</div>
+              <div style={{ color: '#888' }}>เบอร์โทร:</div>
+              <div>{customer.phone || '-'}</div>
+              <div style={{ color: '#888' }}>Email:</div>
+              <div>{customer.email || '-'}</div>
+              {customer.notes && (<>
+                <div style={{ color: '#888' }}>หมายเหตุ:</div>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{customer.notes}</div>
+              </>)}
+            </div>
+          </div>
+
+          {/* Contacts */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <div style={{ fontSize: 15, fontWeight: 600, color: '#1e3a5f' }}>
+              👤 ผู้ประสานงาน ({contacts.length})
+            </div>
+            <button style={styles.btn('primary')}
+              onClick={() => { setEditContact(null); setShowContactForm(true); }}>
+              + เพิ่มผู้ประสานงาน
+            </button>
+          </div>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>หลัก</th>
+                <th style={styles.th}>ชื่อ</th>
+                <th style={styles.th}>ตำแหน่ง</th>
+                <th style={styles.th}>เบอร์โทร</th>
+                <th style={styles.th}>Email</th>
+                <th style={styles.th}>LINE</th>
+                <th style={styles.th}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {contacts.map(ct => (
+                <tr key={ct.id}>
+                  <td style={styles.td}>
+                    <button title={ct.is_primary ? 'รายชื่อหลัก' : 'ตั้งเป็นรายชื่อหลัก'}
+                      onClick={() => !ct.is_primary && setPrimary(ct.id)}
+                      style={{
+                        background: ct.is_primary ? '#fbbf24' : 'transparent',
+                        color: ct.is_primary ? '#fff' : '#9ca3af',
+                        border: ct.is_primary ? 'none' : '1px solid #e5e7eb',
+                        borderRadius: 6, padding: '2px 8px', fontSize: 14,
+                        cursor: ct.is_primary ? 'default' : 'pointer',
+                      }}>★</button>
+                  </td>
+                  <td style={styles.td}>{ct.name}</td>
+                  <td style={styles.td}>{ct.position || '-'}</td>
+                  <td style={styles.td}>{ct.phone || '-'}</td>
+                  <td style={styles.td}>{ct.email || '-'}</td>
+                  <td style={styles.td}>{ct.line_id || '-'}</td>
+                  <td style={styles.td}>
+                    <button style={{ ...styles.btn(), padding: '4px 10px', fontSize: 12, marginRight: 4 }}
+                      onClick={() => { setEditContact(ct); setShowContactForm(true); }}>แก้ไข</button>
+                    <button style={{ ...styles.btn('danger'), padding: '4px 10px', fontSize: 12 }}
+                      onClick={() => removeContact(ct.id)}>ลบ</button>
+                  </td>
+                </tr>
+              ))}
+              {contacts.length === 0 && (
+                <tr><td style={{ ...styles.td, textAlign: 'center', color: '#888', padding: 24 }} colSpan="7">
+                  ยังไม่มีผู้ประสานงาน
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+
+          <CustomerDocumentsSection customerId={customer.id} />
+        </div>
+        <div style={styles.modalFooter}>
+          <button style={styles.btn()} onClick={onClose}>ปิด</button>
+        </div>
+
+        {showContactForm && (
+          <CustomerContactModal customerId={customer.id} contact={editContact}
+            onClose={() => setShowContactForm(false)}
+            onSaved={() => { setShowContactForm(false); load(); }} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ========== CUSTOMER DOCUMENTS SECTION (Phase 3.1.1) ========== */
+function CustomerDocumentsSection({ customerId }) {
+  const [docs, setDocs] = React.useState([]);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  const [pendingFile, setPendingFile] = React.useState(null); // { file, notes }
+  const fileRef = React.useRef(null);
+
+  const load = () => {
+    fetch(`/api/customers/${customerId}/documents`, { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => setDocs(Array.isArray(d) ? d : []))
+      .catch(() => setDocs([]));
+  };
+  React.useEffect(load, [customerId]);
+
+  const pickFile = (e) => {
+    setErr('');
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (file.size > 20 * 1024 * 1024) {
+      setErr('ไฟล์ใหญ่เกิน 20 MB');
+      e.target.value = '';
+      return;
+    }
+    setPendingFile({ file, notes: '' });
+    e.target.value = '';
+  };
+
+  const upload = async () => {
+    if (!pendingFile) return;
+    setBusy(true); setErr('');
+    try {
+      const fd = new FormData();
+      fd.append('file', pendingFile.file);
+      if (pendingFile.notes) fd.append('notes', pendingFile.notes);
+      const res = await fetch(`/api/customers/${customerId}/documents`, {
+        method: 'POST', headers: authHeaders(), body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) { setErr(data.error || 'อัพโหลดไม่สำเร็จ'); return; }
+      setPendingFile(null);
+      load();
+    } finally { setBusy(false); }
+  };
+
+  const remove = async (docId, name) => {
+    if (!confirm(`ยืนยันลบไฟล์ "${name}"?`)) return;
+    const res = await fetch(`/api/customers/${customerId}/documents/${docId}`, {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    if (res.ok) load(); else alert('ลบไม่สำเร็จ');
+  };
+
+  const downloadUrl = (docId) =>
+    `/api/customers/${customerId}/documents/${docId}/download?t=${localStorage.getItem('token')}`;
+
+  const fileIcon = (mime, name) => {
+    const ext = (name || '').toLowerCase().split('.').pop();
+    if (mime?.startsWith('image/')) return '🖼️';
+    if (ext === 'pdf') return '📄';
+    if (['doc', 'docx'].includes(ext)) return '📝';
+    if (['xls', 'xlsx'].includes(ext)) return '📊';
+    return '📎';
+  };
+
+  const formatSize = (bytes) => {
+    if (!bytes) return '-';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+  };
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div style={{ fontSize: 15, fontWeight: 600, color: '#1e3a5f' }}>
+          📎 เอกสารแนบ ({docs.length})
+        </div>
+        <div>
+          <input ref={fileRef} type="file"
+            accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx"
+            style={{ display: 'none' }} onChange={pickFile} />
+          <button style={styles.btn('primary')}
+            onClick={() => fileRef.current && fileRef.current.click()}
+            disabled={busy || !!pendingFile}>
+            + แนบไฟล์
+          </button>
+        </div>
+      </div>
+
+      {err && <div style={styles.error}>{err}</div>}
+
+      {/* Pending upload — กรอก notes ก่อนยืนยัน */}
+      {pendingFile && (
+        <div style={{
+          background: '#fef9e7', border: '1px solid #fde68a',
+          borderRadius: 8, padding: '12px 16px', marginBottom: 12,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <span style={{ fontSize: 20 }}>{fileIcon(pendingFile.file.type, pendingFile.file.name)}</span>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600 }}>{pendingFile.file.name}</div>
+              <div style={{ fontSize: 12, color: '#888' }}>{formatSize(pendingFile.file.size)}</div>
+            </div>
+          </div>
+          <input style={{ ...styles.input, fontSize: 13 }}
+            placeholder="หมายเหตุ (ไม่บังคับ) เช่น สัญญา, ภพ.20, ใบจดทะเบียน"
+            value={pendingFile.notes}
+            onChange={e => setPendingFile(p => ({ ...p, notes: e.target.value }))} />
+          <div style={{ marginTop: 8, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button style={styles.btn()} onClick={() => setPendingFile(null)} disabled={busy}>ยกเลิก</button>
+            <button style={styles.btn('primary')} onClick={upload} disabled={busy}>
+              {busy ? 'กำลังอัพโหลด…' : 'ยืนยันแนบ'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {docs.length === 0 && !pendingFile ? (
+        <div style={{
+          padding: 20, textAlign: 'center', color: '#888',
+          background: '#fafbfc', borderRadius: 8, border: '1px dashed #e5e7eb',
+        }}>
+          ยังไม่มีเอกสารแนบ
+        </div>
+      ) : (
+        <table style={styles.table}>
+          <thead>
+            <tr>
+              <th style={styles.th} colSpan="2">ไฟล์</th>
+              <th style={styles.th}>หมายเหตุ</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>ขนาด</th>
+              <th style={styles.th}>วันที่อัพ</th>
+              <th style={styles.th}>ผู้อัพ</th>
+              <th style={styles.th}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {docs.map(d => (
+              <tr key={d.id} style={styles.trHover}>
+                <td style={{ ...styles.td, width: 30, paddingRight: 0, fontSize: 18 }}>
+                  {fileIcon(d.mime_type, d.file_name)}
+                </td>
+                <td style={styles.td}>
+                  <a href={downloadUrl(d.id)} target="_blank" rel="noreferrer"
+                    style={{ color: '#2563eb', textDecoration: 'underline' }}>
+                    {d.file_name}
+                  </a>
+                </td>
+                <td style={styles.td}>{d.notes || '-'}</td>
+                <td style={{ ...styles.td, textAlign: 'right' }}>{formatSize(d.file_size)}</td>
+                <td style={styles.td}>{new Date(d.uploaded_at).toLocaleDateString('th-TH')}</td>
+                <td style={styles.td}>{d.uploaded_by_name || '-'}</td>
+                <td style={styles.td}>
+                  <button style={{ ...styles.btn('danger'), padding: '4px 10px', fontSize: 12 }}
+                    onClick={() => remove(d.id, d.file_name)}>ลบ</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+/* ========== CUSTOMER CONTACT MODAL ========== */
+function CustomerContactModal({ customerId, contact, onClose, onSaved }) {
+  const [form, setForm] = React.useState(contact || {
+    name: '', position: '', phone: '', email: '', line_id: '',
+    is_primary: false, notes: '',
+  });
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+
+  const save = async () => {
+    setErr('');
+    if (!form.name || !form.name.trim()) { setErr('กรุณากรอกชื่อผู้ประสานงาน'); return; }
+    setBusy(true);
+    try {
+      const url = contact
+        ? `/api/customers/${customerId}/contacts/${contact.id}`
+        : `/api/customers/${customerId}/contacts`;
+      const method = contact ? 'PUT' : 'POST';
+      const res = await fetch(url, {
+        method, headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json();
+      if (!res.ok) { setErr(data.error || 'บันทึกไม่สำเร็จ'); return; }
+      onSaved();
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ ...styles.overlay, zIndex: 10001 }}>
+      <div style={styles.modal} onClick={e => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <div style={styles.modalTitle}>
+            {contact ? 'แก้ไขผู้ประสานงาน' : 'เพิ่มผู้ประสานงาน'}
+          </div>
+          <button style={{ ...styles.btn(), padding: '4px 10px' }} onClick={onClose}>✕</button>
+        </div>
+        <div style={styles.modalBody}>
+          {err && <div style={styles.error}>{err}</div>}
+          <div style={styles.formGrid}>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={styles.label}>ชื่อ *</label>
+              <input style={styles.input} value={form.name || ''}
+                onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={styles.label}>ตำแหน่ง</label>
+              <input style={styles.input} value={form.position || ''}
+                placeholder="เช่น ฝ่ายจัดซื้อ, ผู้จัดการ"
+                onChange={e => setForm(f => ({ ...f, position: e.target.value }))} />
+            </div>
+            <div>
+              <label style={styles.label}>เบอร์โทร</label>
+              <input style={styles.input} value={form.phone || ''}
+                onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
+            </div>
+            <div>
+              <label style={styles.label}>Email</label>
+              <input style={styles.input} value={form.email || ''}
+                onChange={e => setForm(f => ({ ...f, email: e.target.value }))} />
+            </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={styles.label}>LINE ID</label>
+              <input style={styles.input} value={form.line_id || ''}
+                onChange={e => setForm(f => ({ ...f, line_id: e.target.value }))} />
+            </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={styles.label}>หมายเหตุ</label>
+              <textarea style={{ ...styles.input, minHeight: 50, resize: 'vertical' }}
+                value={form.notes || ''}
+                onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+            </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input type="checkbox" checked={!!form.is_primary}
+                  onChange={e => setForm(f => ({ ...f, is_primary: e.target.checked }))} />
+                <span>ตั้งเป็นรายชื่อหลัก (★)</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div style={styles.modalFooter}>
+          <button style={styles.btn()} onClick={onClose} disabled={busy}>ยกเลิก</button>
+          <button style={styles.btn('primary')} onClick={save} disabled={busy}>
+            {busy ? 'กำลังบันทึก…' : 'บันทึก'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PurchaseOrderPage() {
   const [orders, setOrders] = React.useState([]);
   const [receivePO, setReceivePO] = React.useState(null);
