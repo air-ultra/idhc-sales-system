@@ -18,6 +18,7 @@ const companyBankRoutes = require('./routes/companyBankAccounts');
 const departmentRoutes = require('./routes/departments');
 const customerRoutes = require('./routes/customers');
 const quotationRoutes = require('./routes/quotations');
+const salesOrdersRoutes = require('./routes/salesOrders');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -54,6 +55,7 @@ app.use('/api/company-bank-accounts', companyBankRoutes);
 app.use('/api/departments', departmentRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/quotations', quotationRoutes);
+app.use('/api/sales-orders', salesOrdersRoutes);
 app.use('/api/users', userRoutes);
 
 // Error handler
