@@ -114,6 +114,7 @@ const menuItems = [
   { key: 'payroll', icon: '💰', label: 'Payroll' },
   { key: 'customers', icon: '🏢', label: 'ลูกค้า' },
   { key: 'quotation', icon: '🧾', label: 'ใบเสนอราคา' },
+  { key: 'sales-order', icon: '📋', label: 'ใบสั่งขาย' },
   { key: 'stock', icon: '📦', label: 'คลังสินค้า' },
   { key: 'purchase', icon: '🛒', label: 'ใบสั่งซื้อ' },
   { key: 'withholding', icon: '📄', label: 'หัก ณ ที่จ่าย' },
@@ -125,6 +126,7 @@ function Sidebar({ active, onNavigate, user, onLogout }) {
   const location = useLocation();
   const isOnPurchaseRoute = location.pathname.startsWith('/purchase');
   const isOnQuotationRoute = location.pathname.startsWith('/quotation');
+  const isOnSalesOrderRoute = location.pathname.startsWith('/sales-order');
   return (
     <div style={styles.sidebar}>
       <div style={styles.sidebarLogo}><div style={styles.sidebarLogoText}>Sales System</div><div style={styles.sidebarLogoSub}>Management Platform</div></div>
@@ -132,7 +134,8 @@ function Sidebar({ active, onNavigate, user, onLogout }) {
         {menuItems.map(item => {
           const isActive = item.key === 'purchase' ? isOnPurchaseRoute
                           : item.key === 'quotation' ? isOnQuotationRoute
-                          : (active === item.key && !isOnPurchaseRoute && !isOnQuotationRoute);
+                          : item.key === 'sales-order' ? isOnSalesOrderRoute
+                          : (active === item.key && !isOnPurchaseRoute && !isOnQuotationRoute && !isOnSalesOrderRoute);
           const handleClick = () => {
             if (item.key === 'quotation') {
               navigate('/quotation');
@@ -141,8 +144,12 @@ function Sidebar({ active, onNavigate, user, onLogout }) {
             }
             if (item.key === 'purchase') {
               navigate('/purchase');
+            } else if (item.key === 'sales-order') {
+              navigate('/sales-order');
+              onNavigate(item.key);
+              return;
             } else {
-              if (isOnPurchaseRoute || isOnQuotationRoute) navigate('/');
+              if (isOnPurchaseRoute || isOnQuotationRoute || isOnSalesOrderRoute) navigate('/');
               onNavigate(item.key);
             }
           };
@@ -1019,6 +1026,218 @@ function StaffDetailPage({ staffId, onBack, onRefresh }) {
 }
 
 /* ========== MAIN APP ========== */
+
+/* ====================================================================
+ * Sales Order Pages — Phase 3.3B
+ * ==================================================================== */
+
+function SalesOrderListPage() {
+  const [orders, setOrders] = React.useState([]);
+  const [search, setSearch] = React.useState('');
+  const [filterStatus, setFilterStatus] = React.useState('');
+  const navigate = useNavigate();
+
+  const load = () => {
+    const params = new URLSearchParams();
+    if (search) params.append('q', search);
+    if (filterStatus) params.append('status', filterStatus);
+    const qs = params.toString();
+    fetch(`/api/sales-orders${qs ? '?' + qs : ''}`, { headers: authHeaders() })
+      .then(r => r.json())
+      .then(d => setOrders(Array.isArray(d) ? d : []))
+      .catch(() => setOrders([]));
+  };
+  React.useEffect(load, [search, filterStatus]);
+
+  const remove = async (so) => {
+    if (!confirm(`ยืนยันลบใบสั่งขาย ${so.so_number}?`)) return;
+    const res = await fetch(`/api/sales-orders/${so.id}`, {
+      method: 'DELETE', headers: authHeaders(),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) load();
+    else alert(data.error || 'ลบไม่สำเร็จ');
+  };
+
+  const cancel = async (so) => {
+    const reason = prompt(`เหตุผลในการยกเลิก SO ${so.so_number}?`, '');
+    if (reason === null) return;
+    const res = await fetch(`/api/sales-orders/${so.id}/cancel`, {
+      method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) load();
+    else alert(data.error || 'ยกเลิกไม่สำเร็จ');
+  };
+
+  const statusBadge = (status) => {
+    if (status === 'draft')     return <span style={styles.badge()}>แบบร่าง</span>;
+    if (status === 'approved')  return <span style={styles.badge('blue')}>อนุมัติแล้ว</span>;
+    if (status === 'completed') return <span style={styles.badge('green')}>เสร็จสิ้น</span>;
+    if (status === 'cancelled') return <span style={styles.badge('red')}>ยกเลิก</span>;
+    return <span style={styles.badge()}>{status}</span>;
+  };
+
+  // Footer total (only count active SOs — exclude cancelled)
+  const totalAmount = orders
+    .filter(o => o.status !== 'cancelled')
+    .reduce((sum, o) => sum + Number(o.grand_total || 0), 0);
+
+  return (
+    <div>
+      <div style={styles.pageHeader}>
+        <div style={styles.pageTitle}>📋 ใบสั่งขาย (Sales Order)</div>
+        <button style={styles.btn('primary')} onClick={() => navigate('/sales-order/new')}>
+          + สร้างใบสั่งขาย
+        </button>
+      </div>
+
+      {/* Filter bar */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+        <input
+          type="text"
+          placeholder="🔍 ค้นหาเลขที่/ลูกค้า/ชื่องาน..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ ...styles.input, flex: 1, minWidth: 240 }}
+        />
+        <select
+          value={filterStatus}
+          onChange={(e) => setFilterStatus(e.target.value)}
+          style={{ ...styles.input, minWidth: 160 }}
+        >
+          <option value="">ทุกสถานะ</option>
+          <option value="draft">แบบร่าง</option>
+          <option value="approved">อนุมัติแล้ว</option>
+          <option value="completed">เสร็จสิ้น</option>
+          <option value="cancelled">ยกเลิก</option>
+        </select>
+      </div>
+
+      {/* Table */}
+      {orders.length === 0 ? (
+        <div style={styles.emptyState}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>📋</div>
+          <div>ยังไม่มีใบสั่งขาย</div>
+          <div style={{ fontSize: 13, color: QtInvoiceLayout.textMuted, marginTop: 8 }}>
+            กดปุ่ม "+ สร้างใบสั่งขาย" เพื่อเริ่ม
+          </div>
+        </div>
+      ) : (
+        <div style={styles.card}>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>เลขที่</th>
+                <th style={styles.th}>วันที่</th>
+                <th style={styles.th}>ลูกค้า</th>
+                <th style={styles.th}>ชื่องาน</th>
+                <th style={{ ...styles.th, textAlign: 'center' }}>รายการ</th>
+                <th style={{ ...styles.th, textAlign: 'right' }}>ยอดรวม</th>
+                <th style={{ ...styles.th, textAlign: 'center' }}>สถานะ</th>
+                <th style={{ ...styles.th, textAlign: 'center' }}>QT</th>
+                <th style={{ ...styles.th, textAlign: 'center' }}>จัดการ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {orders.map((o) => (
+                <tr key={o.id}>
+                  <td style={styles.td}>
+                    <a
+                      onClick={() => navigate(`/sales-order/${o.id}`)}
+                      style={{ color: QtInvoiceLayout.navy, cursor: 'pointer', fontWeight: 600 }}
+                    >
+                      {o.so_number}
+                    </a>
+                  </td>
+                  <td style={styles.td}>
+                    {o.issue_date ? new Date(o.issue_date).toLocaleDateString('th-TH') : '-'}
+                  </td>
+                  <td style={styles.td}>{o.customer_name || '-'}</td>
+                  <td style={styles.td}>{o.project_name || '-'}</td>
+                  <td style={{ ...styles.td, textAlign: 'center' }}>{o.item_count || 0}</td>
+                  <td style={{ ...styles.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    {Number(o.grand_total || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </td>
+                  <td style={{ ...styles.td, textAlign: 'center' }}>{statusBadge(o.status)}</td>
+                  <td style={{ ...styles.td, textAlign: 'center', fontSize: 12, color: QtInvoiceLayout.textMuted }}>
+                    {o.quotation_no ? (
+                      <a
+                        onClick={() => navigate(`/quotation/${o.quotation_id}`)}
+                        style={{ color: QtInvoiceLayout.navy, cursor: 'pointer' }}
+                      >
+                        {o.quotation_no}
+                      </a>
+                    ) : '-'}
+                  </td>
+                  <td style={{ ...styles.td, textAlign: 'center' }}>
+                    {o.status === 'draft' && (
+                      <>
+                        <button
+                          style={{ ...styles.btn('default'), padding: '4px 10px', fontSize: 12, marginRight: 4 }}
+                          onClick={() => navigate(`/sales-order/${o.id}/edit`)}
+                        >
+                          แก้ไข
+                        </button>
+                        <button
+                          style={{ ...styles.btn('danger'), padding: '4px 10px', fontSize: 12 }}
+                          onClick={() => remove(o)}
+                        >
+                          ลบ
+                        </button>
+                      </>
+                    )}
+                    {(o.status === 'approved' || o.status === 'draft') && o.status !== 'cancelled' && (
+                      <button
+                        style={{ ...styles.btn('default'), padding: '4px 10px', fontSize: 12, marginLeft: 4 }}
+                        onClick={() => cancel(o)}
+                      >
+                        ยกเลิก
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{ background: '#f8fafc', fontWeight: 600 }}>
+                <td colSpan={5} style={{ ...styles.td, textAlign: 'right' }}>
+                  รวม {orders.filter(o => o.status !== 'cancelled').length} รายการ (ไม่นับยกเลิก):
+                </td>
+                <td style={{ ...styles.td, textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: QtInvoiceLayout.navy }}>
+                  {totalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </td>
+                <td colSpan={3} style={styles.td}></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Placeholder — will be implemented in 3.3B.4 */
+function SalesOrderFormPage() {
+  return (
+    <div style={{ padding: 40, textAlign: 'center', color: QtInvoiceLayout.textMuted }}>
+      <div style={{ fontSize: 48, marginBottom: 12 }}>🚧</div>
+      <div>หน้านี้จะ implement ใน Phase 3.3B.4</div>
+    </div>
+  );
+}
+
+/* Placeholder — will be implemented in 3.3B.5 */
+function SalesOrderDetailPage() {
+  return (
+    <div style={{ padding: 40, textAlign: 'center', color: QtInvoiceLayout.textMuted }}>
+      <div style={{ fontSize: 48, marginBottom: 12 }}>🚧</div>
+      <div>หน้านี้จะ implement ใน Phase 3.3B.5</div>
+    </div>
+  );
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -1070,6 +1289,10 @@ function AppInner() {
           <Route path="/quotation/new" element={<QuotationFormPage />} />
           <Route path="/quotation/:id" element={<QuotationDetailPage />} />
           <Route path="/quotation/:id/edit" element={<QuotationFormPage />} />
+          <Route path="/sales-order" element={<SalesOrderListPage />} />
+          <Route path="/sales-order/new" element={<SalesOrderFormPage />} />
+          <Route path="/sales-order/:id" element={<SalesOrderDetailPage />} />
+          <Route path="/sales-order/:id/edit" element={<SalesOrderFormPage />} />
           <Route path="*" element={
             <>
               {page === 'dashboard' && <DashboardPage staffList={staffList} />}
