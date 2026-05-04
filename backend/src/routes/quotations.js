@@ -1,9 +1,44 @@
 // backend/src/routes/quotations.js
 // Phase 3.2A — Quotation CRUD
+// Phase 3.2B.1 — PDF Export endpoint
 const express = require('express');
 const { query, getClient } = require('../config/database');
 const { authenticate } = require('../middleware/auth');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const { execSync } = require('child_process');
 const router = express.Router();
+
+/* ───── Thai number → words (shared with PO/WHT) ───── */
+const _DIGITS = ['', 'หนึ่ง', 'สอง', 'สาม', 'สี่', 'ห้า', 'หก', 'เจ็ด', 'แปด', 'เก้า'];
+const _POSITIONS = ['', 'สิบ', 'ร้อย', 'พัน', 'หมื่น', 'แสน', 'ล้าน'];
+function _convertInt(n) {
+  if (n === 0) return '';
+  const s = String(n);
+  const len = s.length;
+  let result = '';
+  for (let i = 0; i < len; i++) {
+    const d = parseInt(s[i]);
+    const pos = len - 1 - i;
+    if (d === 0) continue;
+    if (pos === 0 && d === 1 && len > 1) result += 'เอ็ด';
+    else if (pos === 1 && d === 2) result += 'ยี่' + _POSITIONS[pos];
+    else if (pos === 1 && d === 1) result += _POSITIONS[pos];
+    else result += _DIGITS[d] + _POSITIONS[pos];
+  }
+  return result;
+}
+function numToThaiWords(n) {
+  if (!n || n === 0) return 'ศูนย์บาทถ้วน';
+  const parts = Number(n).toFixed(2).split('.');
+  const baht = parseInt(parts[0]);
+  const satang = parseInt(parts[1]);
+  let txt = _convertInt(baht) + 'บาท';
+  if (satang === 0) txt += 'ถ้วน';
+  else txt += _convertInt(satang) + 'สตางค์';
+  return txt;
+}
 
 /* ===== Helper: gen quotation number (QT202605XXXX) ===== */
 async function genQuotationNumber(client, issueDate) {
@@ -425,6 +460,92 @@ router.delete('/:id', authenticate, async (req, res) => {
       });
     }
     res.status(500).json({ error: err.message });
+  }
+});
+
+/* ========== GENERATE QUOTATION PDF (Phase 3.2B.1) ========== */
+router.get('/:id/pdf', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    // ?stamp=1 (default) | ?stamp=0
+    const showStamp = req.query.stamp !== '0';
+
+    const qRes = await query(
+      `SELECT
+         q.*,
+         c.customer_code, c.name AS customer_name, c.tax_id AS customer_tax_id,
+         c.branch AS customer_branch, c.address AS customer_address,
+         c.postal_code AS customer_postal_code,
+         c.phone AS customer_phone, c.email AS customer_email,
+         ct.name AS contact_name, ct.position AS contact_position,
+         ct.phone AS contact_phone, ct.email AS contact_email,
+         s.first_name_th AS salesperson_first_name, s.last_name_th AS salesperson_last_name,
+         sc.mobile_phone AS salesperson_phone
+       FROM quotations q
+       LEFT JOIN customers c ON c.id = q.customer_id
+       LEFT JOIN customer_contacts ct ON ct.id = q.contact_id
+       LEFT JOIN staff s ON s.id = q.salesperson_id
+       LEFT JOIN staff_contact sc ON sc.staff_id = s.id
+       WHERE q.id = $1`,
+      [id]
+    );
+    if (qRes.rows.length === 0) return res.status(404).json({ error: 'Quotation not found' });
+
+    const itemsRes = await query(
+      `SELECT i.*,
+              p.product_code, p.product_type,
+              p.brand AS p_brand, p.model AS p_model
+       FROM quotation_items i
+       LEFT JOIN products p ON p.id = i.product_id
+       WHERE i.quotation_id = $1
+       ORDER BY i.display_order ASC, i.id ASC`,
+      [id]
+    );
+
+    const qt = qRes.rows[0];
+    const pdfData = {
+      ...qt,
+      // Force numeric for safety
+      subtotal: Number(qt.subtotal || 0),
+      amount_after_discount: Number(qt.amount_after_discount || 0),
+      discount_amount: Number(qt.discount_amount || 0),
+      discount_percent: Number(qt.discount_percent || 0),
+      vat_rate: Number(qt.vat_rate || 0),
+      vat_amount: Number(qt.vat_amount || 0),
+      wht_rate: Number(qt.wht_rate || 0),
+      wht_amount: Number(qt.wht_amount || 0),
+      grand_total: Number(qt.grand_total || 0),
+      net_payable: Number(qt.net_payable || 0),
+      grand_total_words: numToThaiWords(Number(qt.grand_total || 0)),
+      show_stamp: showStamp,
+      items: itemsRes.rows.map(it => ({
+        product_id: it.product_id,
+        product_name: it.product_name || '',
+        product_brand: it.product_brand || it.p_brand || '',
+        product_model: it.product_model || it.p_model || '',
+        description: it.description || '',
+        unit: it.unit || '',
+        quantity: Number(it.quantity || 0),
+        unit_price: Number(it.unit_price || 0),
+        line_total: Number(it.total_price || 0),
+      })),
+    };
+
+    const tmpFile = path.join(os.tmpdir(), `qt_${qt.quotation_no}_${Date.now()}.pdf`);
+    const scriptPath = path.join(__dirname, '..', 'utils', 'generate_quotation_pdf.py');
+    const tmpJson = tmpFile + '.json';
+    fs.writeFileSync(tmpJson, JSON.stringify(pdfData));
+    execSync(`cat "${tmpJson}" | python3 "${scriptPath}" "${tmpFile}"`);
+    fs.unlinkSync(tmpJson);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${qt.quotation_no}.pdf"`);
+    const stream = fs.createReadStream(tmpFile);
+    stream.pipe(res);
+    stream.on('end', () => fs.unlink(tmpFile, () => {}));
+  } catch (err) {
+    console.error('GET /quotations/:id/pdf error:', err);
+    res.status(500).json({ error: 'ไม่สามารถสร้าง PDF ได้: ' + err.message });
   }
 });
 
