@@ -142,7 +142,7 @@ function Sidebar({ active, onNavigate, user, onLogout }) {
             if (item.key === 'purchase') {
               navigate('/purchase');
             } else {
-              if (isOnPurchaseRoute) navigate('/');
+              if (isOnPurchaseRoute || isOnQuotationRoute) navigate('/');
               onNavigate(item.key);
             }
           };
