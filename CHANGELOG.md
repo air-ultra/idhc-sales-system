@@ -1,4 +1,29 @@
 [ paste เนื้อหา CHANGELOG_phase_3.1_entry.md ทั้งหมดที่นี่ ]
+## [Phase 3.2A.1 — Sidebar Navigation Fix from /quotation routes] — 2026-05-04
+
+### Fixed
+
+#### 🧭 Sidebar — กดเมนูอื่นไม่ได้ตอนอยู่หน้าใบเสนอราคา
+- **อาการ:** อยู่หน้า `/quotation` หรือ `/quotation/*` → กดเมนูซ้ายอื่นๆ ไม่เปลี่ยนหน้า ยกเว้น "ใบสั่งซื้อ" ที่ทำงานได้
+- **Root cause:** ใน `Sidebar.handleClick` (App.jsx:145) — branch fallback (เมนูอื่นๆ ที่ไม่ใช่ purchase/quotation) เช็คเฉพาะ `isOnPurchaseRoute` → URL ค้างที่ `/quotation/*` → React Router match Quotation route ก่อนเข้า catch-all `<Route path="*">` → `setPage(...)` ทำงานแต่จอไม่เปลี่ยน
+- **Fix:** เพิ่ม `|| isOnQuotationRoute` ในเงื่อนไข navigate('/'):
+  ```js
+  // เก่า
+  if (isOnPurchaseRoute) navigate('/');
+  // ใหม่
+  if (isOnPurchaseRoute || isOnQuotationRoute) navigate('/');
+  ```
+- เมนู "ใบสั่งซื้อ" ทำงานอยู่แล้วเพราะ branch ของตัวเองเรียก `navigate('/purchase')` ตรงๆ — branch fallback ไม่ได้ exercise
+
+### Lesson Learned
+
+10. **Hybrid routing — branches ต้อง symmetric** — ตอนเพิ่ม route group ใหม่ใน Sidebar (Phase 3.2A เพิ่ม `/quotation/*` ต่อจาก `/purchase/*` เดิม) ต้องเช็ค **2 จุดเสมอ**:
+    1. Branch ของตัวเอง (กดเมนูตัวเองแล้ว `navigate('/xxx')`)
+    2. Branch fallback (กดเมนูอื่นแล้ว `navigate('/')` ออกจาก route ตัวเองก่อน)
+    - ถ้าลืมจุดที่ 2 → URL ค้าง → catch-all route ไม่ render → จอไม่เปลี่ยน
+    - Pattern ที่ถูก: `if (isOnPurchaseRoute || isOnQuotationRoute || ...) navigate('/');` ก่อน `onNavigate(item.key)`
+    - **บทเรียนต่อยอด:** เมื่อมี route group เพิ่มในอนาคต (Sales Order, Invoice, ฯลฯ) → ต้อง update เงื่อนไขนี้ทุกครั้ง
+
 ## [Phase 3.2A — Quotation CRUD + Invoice-Style Detail] — 2026-05-03
 
 ### Added

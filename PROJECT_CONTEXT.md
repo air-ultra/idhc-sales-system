@@ -1460,9 +1460,10 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 
 ---
 
-**Last Updated:** 2026-05-03 (Phase 3.1 — Customer Master + Contacts + Documents)
+**Last Updated:** 2026-05-04 (Phase 3.2A.1 — Sidebar Navigation Fix from /quotation routes)
 
 **Latest Commits:**
+- `92385a5` — fix(sidebar): allow navigating away from /quotation routes (Phase 3.2A.1)
 - `ff172f8` — feat(phase-3.2A): Quotation CRUD + invoice-style Detail page
 - `be66460` — docs: update CHANGELOG + PROJECT_CONTEXT for Phase 3.1 + add migrations
 - `95da4c7` — feat(customer): customer master + contacts + documents (Phase 3.1)
@@ -1476,7 +1477,7 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 - `c088ccf` — docs: update PROJECT_CONTEXT.md for Phase 2.7-B2
 
 **Pending commit:**
-- (none — ล่าสุด Phase 3.2A + docs commit เรียบร้อย)
+- (none — ล่าสุด Phase 3.2A.1 sidebar fix + docs commit เรียบร้อย)
 
 **Pending features (รอทำต่อ):**
 - ⏳ Phase 3.2B: PDF Export (WeasyPrint pattern, next!)
