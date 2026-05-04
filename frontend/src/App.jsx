@@ -4457,6 +4457,10 @@ function QuotationDetailPage() {
           <button style={qtBtn('default')} disabled={busy}
             onClick={() => changeStatus('sent', 'กลับเป็น ส่งแล้ว')}>↺ Sent</button>
         )}
+        <button style={qtBtn('default')}
+          onClick={() => window.open(`/api/quotations/${id}/pdf?t=${localStorage.getItem('token')}&stamp=${showStamp ? 1 : 0}`, '_blank')}>
+          🖨️ พิมพ์ PDF
+        </button>
         <button style={qtBtn('default')} onClick={() => navigate(`/quotation/${id}/edit`)}>แก้ไข</button>
         <button style={qtBtn('danger')} onClick={remove}>ลบ</button>
       </div>
