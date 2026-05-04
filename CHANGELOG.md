@@ -1,4 +1,37 @@
 [ paste เนื้อหา CHANGELOG_phase_3.1_entry.md ทั้งหมดที่นี่ ]
+## [Phase 3.2A.2 — Quotation Form UX + Contact Label] — 2026-05-04
+
+### Added
+
+#### 🪞 Quotation Form — Customer Info แบ่ง 2 column
+- เดิม: กล่องข้อมูลลูกค้าใน QuotationFormPage แสดงเต็มความกว้าง (tax_id/address/phone/email) — ไม่มีข้อมูลผู้ประสานงาน
+- ใหม่: split เป็น 2 column ด้วย CSS grid (`gridTemplateColumns: '1fr 1fr'`):
+  - **ซ้าย:** ข้อมูลลูกค้า (เดิม)
+  - **ขวา:** ข้อมูลผู้ประสานงาน — ชื่อ + แผนก + phone + email + line_id
+- Render ขวาเฉพาะเมื่อ `form.contact_id` มีค่า (fallback `1fr` ถ้าไม่เลือก contact)
+- Field ใน column ขวาแสดงเฉพาะที่มีค่า (สอดคล้อง pattern เดียวกับ customer info เดิม)
+- LINE id แสดงเป็น text "L · LINE: @xxx" (ไม่มี LINE icon ใน QtIcon paths)
+- **Component:** `QuotationFormPage` — ใช้ IIFE `(() => { ... })()` หา `selectedContact` จาก `contactsForCustomer`
+- 📝 Commit: `b363248`
+
+### Fixed
+
+#### 🏷️ Customer Contact — เปลี่ยน label "ตำแหน่ง" → "แผนก"
+- **Scope:** Frontend label only — DB column `customer_contacts.position` ไม่เปลี่ยน
+- **เหตุผล:** สอดคล้องกับวิธีจัดการ contact ของ business ไทย (จัดตามแผนก ไม่ใช่ตำแหน่งงาน)
+- **จุดที่แก้** (2 จุดใน App.jsx):
+  - `CustomerDetailModal` — table column header (`<th>ตำแหน่ง</th>` → `<th>แผนก</th>`)
+  - `CustomerContactModal` — form input label (`<label>ตำแหน่ง</label>` → `<label>แผนก</label>`)
+- **ไม่แตะ:** Backend payload, API contracts, DB schema — ข้อมูลเดิมยังใช้ได้ + frontend dropdown/QtDetail ที่ render `(${ct.position})` ก็ทำงานเหมือนเดิม
+- 📝 Commit: `da25095`
+
+### Lesson Learned
+
+11. **Code อาจพร้อมแล้วก่อนเริ่มเขียน** — task "เพิ่มเบอร์ salesperson ในใบเสนอราคา" → grep ก่อน → เจอบรรทัด 4548-4551 ใน `QuotationDetailPage` มี `{qt.salesperson_phone && ...}` พร้อม backend JOIN `sc.mobile_phone AS salesperson_phone` → **ปัญหาคือ data ไม่ใช่ code** → กรอก `mobile_phone` ของ staff ใน Staff Detail → phone โผล่อัตโนมัติ → **ไม่ต้อง patch อะไรเลย** → บทเรียน: ก่อนเขียน feature ใหม่ → grep verify code path เดิมก่อน อาจประหยัดงาน
+12. **อย่าเดา DB schema (ซ้ำบทเรียน 10.10/10.17)** — ครั้งนี้พลาดเดา `staff_contact.work_phone` (ไม่มีจริง — มีแค่ `mobile_phone`) → SQL error → ต้อง `\d staff_contact` verify ก่อนเสมอ ก่อน JOIN/SELECT
+13. **Terminal markdown auto-link พังหมดทุก paste** — terminal client บางตัว auto-link `xxx.md` / `xxx.py` กลายเป็น markdown link `[xxx.md](http://xxx.md)` → heredoc + python ที่ paste ตรง terminal พังเงียบๆ → **workflow default: patch script ขนาด > 5 บรรทัด ส่งผ่าน WinSCP เสมอ** (ตามที่พี่ Air ชอบอยู่แล้ว)
+14. **`git add -p` แยก commit จากไฟล์เดียวกัน** — เมื่อ patch หลายอันรวมในไฟล์เดียว (label rename + split column) → `git add -p` interactive หา hunk → answer y/n ทีละ chunk → commit แยกได้ clean โดยไม่ต้อง revert/replay
+
 ## [Phase 3.2A.1 — Sidebar Navigation Fix from /quotation routes] — 2026-05-04
 
 ### Fixed
