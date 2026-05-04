@@ -3938,34 +3938,75 @@ function QuotationFormPage() {
               </div>
             </div>
 
-            {selectedCustomer && (
-              <div style={{ ...qtStyles.customerInfo, marginTop: 14 }}>
-                {selectedCustomer.tax_id && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                    <QtIcon name="hash" size={14} color="#94a3b8" />
-                    <span>{selectedCustomer.tax_id}{selectedCustomer.branch ? ` · สาขา: ${selectedCustomer.branch}` : ''}</span>
+            {selectedCustomer && (() => {
+              const selectedContact = form.contact_id
+                ? contactsForCustomer.find(ct => ct.id === Number(form.contact_id))
+                : null;
+              return (
+                <div style={{ display: 'grid', gridTemplateColumns: selectedContact ? '1fr 1fr' : '1fr', gap: 12, marginTop: 14 }}>
+                  {/* Left column: customer info */}
+                  <div style={qtStyles.customerInfo}>
+                    {selectedCustomer.tax_id && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <QtIcon name="hash" size={14} color="#94a3b8" />
+                        <span>{selectedCustomer.tax_id}{selectedCustomer.branch ? ` · สาขา: ${selectedCustomer.branch}` : ''}</span>
+                      </div>
+                    )}
+                    {selectedCustomer.address && (
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 4 }}>
+                        <QtIcon name="mapPin" size={14} color="#94a3b8" />
+                        <span>{selectedCustomer.address}{selectedCustomer.postal_code ? ` ${selectedCustomer.postal_code}` : ''}</span>
+                      </div>
+                    )}
+                    {selectedCustomer.phone && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <QtIcon name="phone" size={14} color="#94a3b8" />
+                        <span>{selectedCustomer.phone}</span>
+                      </div>
+                    )}
+                    {selectedCustomer.email && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <QtIcon name="mail" size={14} color="#94a3b8" />
+                        <span>{selectedCustomer.email}</span>
+                      </div>
+                    )}
                   </div>
-                )}
-                {selectedCustomer.address && (
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 4 }}>
-                    <QtIcon name="mapPin" size={14} color="#94a3b8" />
-                    <span>{selectedCustomer.address}{selectedCustomer.postal_code ? ` ${selectedCustomer.postal_code}` : ''}</span>
-                  </div>
-                )}
-                {selectedCustomer.phone && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                    <QtIcon name="phone" size={14} color="#94a3b8" />
-                    <span>{selectedCustomer.phone}</span>
-                  </div>
-                )}
-                {selectedCustomer.email && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <QtIcon name="mail" size={14} color="#94a3b8" />
-                    <span>{selectedCustomer.email}</span>
-                  </div>
-                )}
-              </div>
-            )}
+
+                  {/* Right column: contact info (เฉพาะเมื่อเลือกผู้ประสานงาน) */}
+                  {selectedContact && (
+                    <div style={qtStyles.customerInfo}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <QtIcon name="user" size={14} color="#94a3b8" />
+                        <span>
+                          {selectedContact.is_primary ? '★ ' : ''}{selectedContact.name}
+                          {selectedContact.position ? (
+                            <span style={{ color: '#94a3b8' }}> · {selectedContact.position}</span>
+                          ) : null}
+                        </span>
+                      </div>
+                      {selectedContact.phone && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                          <QtIcon name="phone" size={14} color="#94a3b8" />
+                          <span>{selectedContact.phone}</span>
+                        </div>
+                      )}
+                      {selectedContact.email && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                          <QtIcon name="mail" size={14} color="#94a3b8" />
+                          <span>{selectedContact.email}</span>
+                        </div>
+                      )}
+                      {selectedContact.line_id && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ color: '#94a3b8', fontSize: 12, fontWeight: 600, minWidth: 14, textAlign: 'center' }}>L</span>
+                          <span>LINE: {selectedContact.line_id}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
 
