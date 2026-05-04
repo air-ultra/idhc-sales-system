@@ -1,9 +1,32 @@
 // backend/src/routes/salesOrders.js
 // Phase 3.3A — Sales Order CRUD (no approve/stock-cut yet — that's Phase 3.3D)
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
 const { query, getClient } = require('../config/database');
 const { authenticate } = require('../middleware/auth');
 const router = express.Router();
+
+/* ===== Multer setup for SO attachments ===== */
+const uploadsBaseDir = process.env.UPLOADS_DIR || path.join(__dirname, '../../uploads');
+const soUploadsDir = path.join(uploadsBaseDir, 'so');
+if (!fs.existsSync(soUploadsDir)) {
+  fs.mkdirSync(soUploadsDir, { recursive: true });
+}
+
+const soStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, soUploadsDir),
+  filename: (req, file, cb) => {
+    const ts = Date.now();
+    const safe = String(file.originalname).replace(/[^\w.\-]+/g, '_');
+    cb(null, `so_${req.params.id}_${ts}_${safe}`);
+  },
+});
+const soUpload = multer({
+  storage: soStorage,
+  limits: { fileSize: 20 * 1024 * 1024 },  // 20MB max
+});
 
 /* ===== Helper: gen SO number (SO202605####) ===== */
 async function genSoNumber(client, issueDate) {
@@ -166,13 +189,20 @@ router.get('/:id', authenticate, async (req, res) => {
          ct.phone AS contact_phone, ct.email AS contact_email,
          s.first_name_th AS salesperson_first_name, s.last_name_th AS salesperson_last_name,
          sc.mobile_phone AS salesperson_phone,
-         q.quotation_no
+         q.quotation_no,
+         bc.name AS billing_customer_name, bc.address AS billing_customer_address,
+         bc.tax_id AS billing_customer_tax_id, bc.branch AS billing_customer_branch,
+         bc.postal_code AS billing_customer_postal_code,
+         sitec.name AS site_customer_name, sitec.address AS site_customer_address,
+         sitec.postal_code AS site_customer_postal_code, sitec.phone AS site_customer_phone
        FROM sales_orders so
        LEFT JOIN customers c ON c.id = so.customer_id
        LEFT JOIN customer_contacts ct ON ct.id = so.contact_id
        LEFT JOIN staff s ON s.id = so.salesperson_id
        LEFT JOIN staff_contact sc ON sc.staff_id = s.id
        LEFT JOIN quotations q ON q.id = so.quotation_id
+       LEFT JOIN customers bc ON bc.id = so.billing_customer_id
+       LEFT JOIN customers sitec ON sitec.id = so.site_customer_id
        WHERE so.id = $1`,
       [id]
     );
@@ -186,7 +216,12 @@ router.get('/:id', authenticate, async (req, res) => {
        ORDER BY i.display_order ASC, i.id ASC`,
       [id]
     );
-    res.json({ ...soRes.rows[0], items: itemsRes.rows });
+    const attRes = await query(
+      `SELECT id, file_name, original_name, file_size, mime_type, uploaded_at
+       FROM so_attachments WHERE so_id = $1 ORDER BY id ASC`,
+      [id]
+    );
+    res.json({ ...soRes.rows[0], items: itemsRes.rows, attachments: attRes.rows });
   } catch (err) {
     console.error('GET /sales-orders/:id error:', err);
     res.status(500).json({ error: err.message });
@@ -213,24 +248,34 @@ router.post('/', authenticate, async (req, res) => {
     // Insert SO header
     const headerRes = await client.query(
       `INSERT INTO sales_orders (
-         so_number, quotation_id,
+         so_number, quotation_id, reference_no,
          customer_id, contact_id, salesperson_id,
-         issue_date, delivery_date, project_name, notes,
+         billing_customer_id, site_customer_id,
+         issue_date, delivery_date, installation_date,
+         project_name, notes,
+         credit_days, payment_terms_notes,
          subtotal, discount_mode, discount_percent, discount_amount,
          amount_after_discount, vat_rate, vat_amount,
          wht_rate, wht_amount, grand_total, net_payable, price_includes_vat,
          status, created_by
        ) VALUES (
-         $1, $2, $3, $4, $5,
-         $6, $7, $8, $9,
-         $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21,
-         'draft', $22
+         $1, $2, $3,
+         $4, $5, $6,
+         $7, $8,
+         $9, $10, $11,
+         $12, $13,
+         $14, $15,
+         $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27,
+         'draft', $28
        ) RETURNING id`,
       [
-        soNumber, d.quotation_id || null,
+        soNumber, d.quotation_id || null, d.reference_no || null,
         d.customer_id, d.contact_id || null, d.salesperson_id || null,
-        d.issue_date || new Date(), d.delivery_date || null,
+        d.billing_customer_id || null, d.site_customer_id || null,
+        d.issue_date || new Date(), d.delivery_date || null, d.installation_date || null,
         d.project_name || null, d.notes || null,
+        d.credit_days != null ? Number(d.credit_days) : null,
+        d.payment_terms_notes || null,
         amts.subtotal, amts.discount_mode, amts.discount_percent, amts.discount_amount,
         amts.amount_after_discount, amts.vat_rate, amts.vat_amount,
         amts.wht_rate, amts.wht_amount, amts.grand_total, amts.net_payable, amts.price_includes_vat,
@@ -301,17 +346,25 @@ const updateSO = async (req, res) => {
     // Update header
     await client.query(
       `UPDATE sales_orders SET
-         customer_id = $1, contact_id = $2, salesperson_id = $3,
-         issue_date = $4, delivery_date = $5, project_name = $6, notes = $7,
-         subtotal = $8, discount_mode = $9, discount_percent = $10, discount_amount = $11,
-         amount_after_discount = $12, vat_rate = $13, vat_amount = $14,
-         wht_rate = $15, wht_amount = $16, grand_total = $17, net_payable = $18,
-         price_includes_vat = $19, updated_at = NOW()
-       WHERE id = $20`,
+         reference_no = $1,
+         customer_id = $2, contact_id = $3, salesperson_id = $4,
+         billing_customer_id = $5, site_customer_id = $6,
+         issue_date = $7, delivery_date = $8, installation_date = $9,
+         project_name = $10, notes = $11,
+         credit_days = $12, payment_terms_notes = $13,
+         subtotal = $14, discount_mode = $15, discount_percent = $16, discount_amount = $17,
+         amount_after_discount = $18, vat_rate = $19, vat_amount = $20,
+         wht_rate = $21, wht_amount = $22, grand_total = $23, net_payable = $24,
+         price_includes_vat = $25, updated_at = NOW()
+       WHERE id = $26`,
       [
+        d.reference_no || null,
         d.customer_id, d.contact_id || null, d.salesperson_id || null,
-        d.issue_date || new Date(), d.delivery_date || null,
+        d.billing_customer_id || null, d.site_customer_id || null,
+        d.issue_date || new Date(), d.delivery_date || null, d.installation_date || null,
         d.project_name || null, d.notes || null,
+        d.credit_days != null ? Number(d.credit_days) : null,
+        d.payment_terms_notes || null,
         amts.subtotal, amts.discount_mode, amts.discount_percent, amts.discount_amount,
         amts.amount_after_discount, amts.vat_rate, amts.vat_amount,
         amts.wht_rate, amts.wht_amount, amts.grand_total, amts.net_payable, amts.price_includes_vat,
@@ -398,6 +451,97 @@ router.delete('/:id', authenticate, async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('DELETE /sales-orders/:id error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ===== Attachments endpoints ===== */
+
+/* GET /:id/attachments — list attachments */
+router.get('/:id/attachments', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const r = await query(
+      `SELECT id, file_name, original_name, file_size, mime_type, uploaded_at
+       FROM so_attachments WHERE so_id = $1 ORDER BY id ASC`,
+      [id]
+    );
+    res.json(r.rows);
+  } catch (err) {
+    console.error('GET /sales-orders/:id/attachments error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* POST /:id/attachments — upload (multipart, field name: 'file') */
+router.post('/:id/attachments', authenticate, soUpload.single('file'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!req.file) return res.status(400).json({ error: 'no file uploaded' });
+    const display = (req.body?.file_name || req.file.originalname).trim();
+
+    // Verify SO exists
+    const cur = await query(`SELECT id FROM sales_orders WHERE id = $1`, [id]);
+    if (cur.rows.length === 0) {
+      // Cleanup uploaded file
+      try { fs.unlinkSync(req.file.path); } catch (_) {}
+      return res.status(404).json({ error: 'Sales Order not found' });
+    }
+
+    // Store relative path (uploads/so/...)
+    const relPath = path.relative(uploadsBaseDir, req.file.path).replace(/\\/g, '/');
+
+    const ins = await query(
+      `INSERT INTO so_attachments (so_id, file_name, original_name, file_path, file_size, mime_type, uploaded_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, file_name, original_name, file_size, mime_type, uploaded_at`,
+      [id, display, req.file.originalname, relPath, req.file.size, req.file.mimetype, req.user.id]
+    );
+    res.status(201).json(ins.rows[0]);
+  } catch (err) {
+    console.error('POST /sales-orders/:id/attachments error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* GET /attachments/:attId/download — download file */
+router.get('/attachments/:attId/download', authenticate, async (req, res) => {
+  try {
+    const { attId } = req.params;
+    const r = await query(
+      `SELECT file_path, original_name, mime_type FROM so_attachments WHERE id = $1`,
+      [attId]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Attachment not found' });
+    const att = r.rows[0];
+    const fullPath = path.join(uploadsBaseDir, att.file_path);
+    if (!fs.existsSync(fullPath)) return res.status(404).json({ error: 'File missing on disk' });
+    res.setHeader('Content-Type', att.mime_type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(att.original_name || 'file')}"`);
+    fs.createReadStream(fullPath).pipe(res);
+  } catch (err) {
+    console.error('GET /sales-orders/attachments/:attId/download error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* DELETE /attachments/:attId — remove attachment */
+router.delete('/attachments/:attId', authenticate, async (req, res) => {
+  try {
+    const { attId } = req.params;
+    const r = await query(`SELECT file_path FROM so_attachments WHERE id = $1`, [attId]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Attachment not found' });
+
+    // Try delete file (best-effort)
+    try {
+      const fullPath = path.join(uploadsBaseDir, r.rows[0].file_path);
+      if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+    } catch (_) {}
+
+    await query(`DELETE FROM so_attachments WHERE id = $1`, [attId]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('DELETE /sales-orders/attachments/:attId error:', err);
     res.status(500).json({ error: err.message });
   }
 });
