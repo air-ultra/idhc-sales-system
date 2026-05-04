@@ -3107,7 +3107,7 @@ function CustomerDetailModal({ customer, onClose }) {
               <tr>
                 <th style={styles.th}>หลัก</th>
                 <th style={styles.th}>ชื่อ</th>
-                <th style={styles.th}>ตำแหน่ง</th>
+                <th style={styles.th}>แผนก</th>
                 <th style={styles.th}>เบอร์โทร</th>
                 <th style={styles.th}>Email</th>
                 <th style={styles.th}>LINE</th>
@@ -3378,7 +3378,7 @@ function CustomerContactModal({ customerId, contact, onClose, onSaved }) {
                 onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
             </div>
             <div style={{ gridColumn: 'span 2' }}>
-              <label style={styles.label}>ตำแหน่ง</label>
+              <label style={styles.label}>แผนก</label>
               <input style={styles.input} value={form.position || ''}
                 placeholder="เช่น ฝ่ายจัดซื้อ, ผู้จัดการ"
                 onChange={e => setForm(f => ({ ...f, position: e.target.value }))} />
