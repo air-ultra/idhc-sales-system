@@ -1,4 +1,55 @@
 [ paste เนื้อหา CHANGELOG_phase_3.1_entry.md ทั้งหมดที่นี่ ]
+## [Phase 3.2B.1 — Quotation PDF Export] — 2026-05-04
+
+### Added
+
+#### 📄 Quotation PDF Generator (WeasyPrint)
+- **`backend/src/utils/generate_quotation_pdf.py`** — Python script ใหม่
+  - **Title navy** (`#183b59`) — แตกต่างจาก PO PDF (pink `#c41556`) ตามที่ตกลงกันไว้ใน design
+  - **Running page header** (logo + title + company info + meta box + customer block + ผู้ติดต่อ) — แสดงทุกหน้าผ่าน WeasyPrint `@page { @top-left { content: element(pageHeader) } }` + `position: running()`
+  - **`@page` margin-top: 85mm** — เผื่อพื้นที่ running header เต็ม
+  - **Items table:**
+    - เพิ่ม column **"หน่วย"** (PO ไม่มี — สำคัญในใบเสนอราคา)
+    - Free-text rows highlight สีเหลือง + badge "รายการพิเศษ"
+    - `page-break-inside: avoid` ป้องกัน item row ถูก split กลางคัน → ปัดทั้ง row ไปหน้าใหม่
+  - **Totals:** subtotal → discount → VAT → grand total (bold) → WHT (ถ้ามี) → ยอดชำระ (bold)
+  - **Stamp:** overlay บนกล่อง signature ขวา (rotate -6deg + `mix-blend-mode: multiply`) — toggle ผ่าน `data['show_stamp']`
+  - **Thai date format** ตามรูปแบบไทย (`30 เมษายน 2569`)
+  - **`numToThaiWords`** — port helper จาก `purchaseOrders.js` (shared pattern)
+
+#### 🔌 Backend Endpoint
+- **`GET /api/quotations/:id/pdf`** — endpoint ใหม่ใน `quotations.js`
+  - Reuse query เดียวกับ `GET /:id` (customer + contact + salesperson + `staff_contact.mobile_phone` JOIN)
+  - Server-authoritative numeric coercion ทุก money field + `numToThaiWords` คำนวณที่ backend
+  - Map `quotation_items.total_price` → `line_total` ใน JSON ให้ Python script ใช้ (DB column ยังเป็น `total_price` ตามเดิม)
+  - **`?stamp=1` (default) | `?stamp=0`** — query param ควบคุม stamp
+  - Streams PDF ผ่าน `execSync python3` + JSON pipe + tmp file cleanup (pattern เดียวกับ PO PDF)
+  - Filename: `${quotation_no}.pdf` (เช่น `QT202604001.pdf`)
+
+#### 🎨 Frontend
+- **ปุ่ม "🖨️ พิมพ์ PDF"** ใน `QuotationDetailPage` action bar — ก่อนปุ่ม "แก้ไข"
+  - `window.open` เปิด PDF ใน tab ใหม่
+  - ส่ง `?stamp=` ตาม checkbox **"☑ ใส่ตราประทับ"** ที่ action bar (default = เปิด)
+  - Token ใส่ผ่าน `?t=` query string (รองรับโดย `middleware/auth.js`)
+
+#### 🗂️ Assets + Repository
+- **`backend/src/assets/stamp.png`** — copy จาก `frontend/public/stamp.png` (ให้ Python script เห็น)
+- **`.gitignore`** — เพิ่ม pattern `test_qt*.pdf` + `test_po*.pdf` กัน ad-hoc PDF render samples
+
+### Lesson Learned
+
+15. **ห้ามเดา DB column name (ซ้ำบทเรียน 10.10/10.17)** — ครั้งนี้พลาดเดา `quotation_items.line_total` (จริงคือ `total_price` ตาม PO pattern เดิม) → ทำให้ ยอดรวมใน PDF เป็น 0.00 → ต้อง `\d quotation_items` verify ก่อนเขียน JSON mapping
+16. **WeasyPrint running header ต้อง `@page` margin ใหญ่พอครอบ header content** — เริ่มแรก margin-top: 78mm แต่ header content ~95mm → items overflow ขึ้นบน → ต้องลด font/spacing ของ header (compact CSS) + เพิ่ม margin-top จนพอดี (final = 85mm)
+17. **`page-break-inside: avoid` บน `<tr>`** — ป้องกัน item row ถูก split กลางคัน (เคสเจอ: 10 items, item ที่ 10 description อยู่ติดท้ายหน้า → บรรทัดบนสุดอยู่หน้า 1, รายละเอียดต่อหน้า 2) → ใส่ `page-break-inside: avoid` + `break-inside: avoid` (CSS3) บน `tbody tr` → ทั้ง row ปัดไปหน้าใหม่
+18. **`position: fixed` ใน WeasyPrint คนละความหมายกับ browser** — ใช้แล้ว signature/stamp แสดงทุกหน้าในบาง scenario (ไม่ใช่ที่ต้องการ) → เปลี่ยนเป็น flow ปกติ + `position: relative/absolute` แทน + ใช้ running element สำหรับ repeating header เท่านั้น
+19. **Terminal client auto-link `xxx.md` / `xxx.py` พังหมด heredoc Python** — paste แบบ `python3 << 'PYEOF'` ที่มี `xxx.py` filename → terminal เปลี่ยนเป็น `[xxx.py](http://xxx.py)` → Python syntax พัง → **default workflow: ส่ง patch script via WinSCP เสมอ** (ทำมาตลอด task ของวัน)
+20. **Stamp overlay positioning** — เริ่มแรกใช้ `position: fixed` ที่ root → stamp ลอยไปอยู่ที่ title หน้าแรก → fix: ใช้ `.signatures { position: relative }` + `.stamp { position: absolute }` ภายใน → stamp ติดอยู่กับกล่อง signature เสมอ ทุกหน้า
+
+### Pending (Phase 3.2C+)
+- ⏳ Email send — แนบ PDF ไปยัง customer email (next!)
+- ⏳ Filter + pagination หน้า QT list (server-side)
+- ⏳ Bulk export — เลือกหลายใบ → zip PDF
+
 ## [Phase 3.2A.2 — Quotation Form UX + Contact Label] — 2026-05-04
 
 ### Added
