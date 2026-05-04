@@ -22,3 +22,7 @@ migration_*.sql
 !db/migrations/*.sql
 
 *.bak.*
+
+# Test PDFs (Phase 3.2B.1)
+test_qt*.pdf
+test_po*.pdf
