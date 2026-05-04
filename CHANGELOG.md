@@ -1,4 +1,128 @@
 [ paste เนื้อหา CHANGELOG_phase_3.1_entry.md ทั้งหมดที่นี่ ]
+## [Phase 3.3B.3 — Sales Order Frontend (List Page + Routes)] — 2026-05-04
+
+### Added
+
+#### 🎨 Frontend Skeleton
+- **Sidebar menu item** "📋 ใบสั่งขาย" — แทรกระหว่าง "🧾 ใบเสนอราคา" กับ "📦 คลังสินค้า"
+- **Path detection** `isOnSalesOrderRoute` (mirror Quotation pattern) + extended active highlight ternary chain + extended fallback exclude list
+- **Sidebar handleClick** เพิ่ม branch สำหรับ `'sales-order'` ให้ navigate ตรงๆ ไป `/sales-order` (ก่อนหน้านี้ตกใน else branch แล้วใช้ `onNavigate(item.key)` ทำให้ link ไม่ทำงาน)
+- **4 routes ใหม่:** `/sales-order`, `/sales-order/new`, `/sales-order/:id`, `/sales-order/:id/edit`
+
+#### 📋 SalesOrderListPage
+- Search box + status filter (4 states: draft / approved / completed / cancelled)
+- Table columns: เลขที่ SO, วันที่, ลูกค้า, ชื่องาน, จำนวนรายการ, ยอดรวม, สถานะ, QT link, จัดการ
+- Status badge สี: gray (draft) / blue (approved) / green (completed) / red (cancelled)
+- Action buttons per row: แก้ไข + ลบ (เฉพาะ draft) + ยกเลิก
+- **Footer total row** สรุปยอดรวมทั้งหมด (ไม่นับ cancelled SOs)
+- Empty state พร้อม emoji + คำแนะนำ
+- ใช้ `QtInvoiceLayout.navy` + `QtInvoiceLayout.textMuted` (global const) แทน `C` ที่ scope local ใน QuotationDetailPage
+
+#### 🚧 Placeholders
+- **SalesOrderFormPage** — รอ implement ใน Phase 3.3B.4
+- **SalesOrderDetailPage** — รอ implement ใน Phase 3.3B.5
+
+### Lesson Learned
+
+21. **Terminal display ≠ file content (auto-markdown rendering)** — terminal client บางตัว auto-render dotted identifiers (เช่น `QtInvoiceLayout.navy`, `xxx.py`) เป็น markdown link ตอน paste/echo → display เห็น `[QtInvoiceLayout.navy](http://...)` แต่ในไฟล์จริงเป็น plain `QtInvoiceLayout.navy` → ใช้ `od -c` หรือ `xxd` verify byte จริงเสมอเมื่อสงสัย
+22. **Sidebar handleClick ต้องเพิ่ม branch ทุก route ที่ใช้ navigate to specific path** — ถ้าไม่เพิ่ม จะตกใน else branch ที่ใช้ `onNavigate(item.key)` ทั่วไป → link ไม่ทำงาน (ไม่ navigate)
+23. **`C` constant ใน QuotationDetailPage เป็น local alias** — `const C = QtInvoiceLayout` ที่บรรทัด 4608 อยู่ภายใน function scope → ใช้นอก function ไม่ได้ → ต้องอ้างอิง `QtInvoiceLayout.xxx` ตรงๆ (เป็น const global)
+
+## [Phase 3.3B.1+2 — Sales Order Extra Fields + Attachments Backend] — 2026-05-04
+
+### Added
+
+#### 🗄️ DB (migration_phase_3.3B.1.sql)
+- **ALTER `sales_orders`** เพิ่ม 6 columns:
+  - `billing_customer_id INTEGER` FK customers — เปิดบิลในนามอื่น (NULL = ใช้ customer หลัก)
+  - `site_customer_id INTEGER` FK customers — สถานที่ติดตั้ง (NULL = ใช้ customer หลัก)
+  - `installation_date DATE` — วันติดตั้ง (optional, แยกจาก delivery_date)
+  - `credit_days INTEGER` — เครดิต X วัน (สำหรับ Phase 3.5 คำนวณ invoice due_date)
+  - `payment_terms_notes TEXT` — เงื่อนไขการชำระ (วางบิล/รับเช็ค/บัญชีติดต่อ)
+  - `reference_no VARCHAR(100)` — เลขที่อ้างอิง / customer PO number (pattern เดียวกับ `quotations.reference_no`)
+- **New table `so_attachments`** — multi-file uploads per SO
+  - `file_name` (user-defined) + `original_name` (uploaded filename) + `file_path` + `file_size` + `mime_type` + `uploaded_by` + `uploaded_at`
+  - ON DELETE CASCADE with sales_orders
+- 2 indexes ใหม่: `idx_so_billing_customer`, `idx_so_site_customer`
+
+#### 🔌 Backend (`salesOrders.js`)
+- **multer setup** — uploads/so/ directory (auto-create), filename pattern: `so_<id>_<ts>_<safe_filename>`, 20MB max
+- **GET /:id extended:**
+  - JOIN customers as `bc` (billing) + `sitec` (site) → return `billing_customer_name/address/tax_id/branch/postal_code` + `site_customer_name/address/postal_code/phone`
+  - Include `attachments[]` array in response
+- **POST/PUT/PATCH extended** — handle 6 new fields with `d.credit_days != null ? Number(d.credit_days) : null` numeric coercion
+- **4 new endpoints:**
+  - `GET    /:id/attachments` — list
+  - `POST   /:id/attachments` — upload (multipart, field `file`, optional `file_name` body override)
+  - `GET    /attachments/:attId/download` — stream file with Content-Disposition
+  - `DELETE /attachments/:attId` — delete DB row + best-effort file unlink
+
+### Decisions
+
+| Decision | Reasoning |
+|---|---|
+| `billing_customer_id` NULL default | Most SOs bill in name of buyer — only set when different |
+| `site_customer_id` NULL default | Most SOs install at buyer address — only set when different |
+| Both pick from `customers` master | Per user request — if entity not in system, must create customer first |
+| `reference_no` (not `customer_po_number`) | Pattern parity with `quotations.reference_no`, easy copy on QT→SO |
+| `credit_days` INTEGER + `payment_terms_notes` TEXT | Hybrid: structured (for Phase 3.5 due_date math) + flex (for arbitrary notes) |
+| `so_attachments` no `doc_type` | Free-text user-defined name allows any document (PO ลูกค้า / Email / etc.) without rigid taxonomy |
+
+## [Phase 3.3A — Sales Order DB + Backend CRUD] — 2026-05-04
+
+### Added
+
+#### 🗄️ DB Schema (migration_phase_3.3A.sql)
+- **`sales_orders`** — main SO header table
+  - SO numbering: `SO202605####` per-month scan-last (same pattern as PO/QT — no DB sequence)
+  - Status enum: `draft` / `approved` / `completed` / `cancelled`
+  - Money fields: subtotal / discount (% or amount) / VAT (inclusive or exclusive) / WHT / grand_total / net_payable + cached `total_cost`
+  - Workflow timestamps: `approved_at` / `completed_at` / `cancelled_at` + `cancel_reason`
+  - **Partial unique index** `uq_so_one_per_quotation` — บังคับ 1 QT = 1 active SO (allow recreate after cancel)
+- **`so_items`** — line items (mirror `quotation_items` pattern)
+  - `product_id` NULLABLE in draft (free-text allowed) — enforced NOT NULL on approve via app logic
+  - `unit_cost` + `total_cost` cached for margin lookups without joining serials
+- **`so_item_serials`** — junction `so_items` ↔ `product_serials`
+  - **`UNIQUE(serial_id)`** strict — 1 serial sold once forever (RMA deferred to future phase)
+  - `picked_by` + `picked_at` metadata for audit trail
+- **`product_serials.sold_at`** — TIMESTAMPTZ, set on approve for warranty/service contract calcs
+
+#### 🔌 Backend (`salesOrders.js`)
+- **6 endpoints:**
+  - `GET    /api/sales-orders` — list with filters (status, customer_id, q for search)
+  - `GET    /api/sales-orders/:id` — detail with items + customer + contact + salesperson JOINs (incl. `staff_contact.mobile_phone`)
+  - `POST   /api/sales-orders` — transactional create with items
+  - `PUT    /api/sales-orders/:id` — update (draft only)
+  - `PATCH  /api/sales-orders/:id` — alias for PUT (lesson 10.11)
+  - `POST   /api/sales-orders/:id/cancel` — soft cancel with reason; rejects if status is approved/completed
+  - `DELETE /api/sales-orders/:id` — hard delete, draft only
+- **Helpers** (mirror `quotations.js`):
+  - `genSoNumber()` — scan-last per YYYYMM
+  - `computeAmounts()` — server-authoritative subtotal / discount (% or amount) / VAT (inclusive or exclusive) / WHT / grand_total / net_payable
+  - `validateItems()` — name + qty > 0 sanity checks
+- **Friendly 409** error on `uq_so_one_per_quotation` violation
+
+### Decisions Captured (Phase 3.3 design Q&A)
+
+| # | Decision |
+|---|---|
+| Q1 | Stock cut on **approve SO** with serial picker popup |
+| Q2 | Logic 3 ทาง — service / non_stock / stock |
+| Q3 | บังคับ map free-text → real product ก่อน approve |
+| Q4 | 1 QT = 1 SO (strict 1:1) |
+| Q5 | SO เป็น internal doc — user เพิ่ม items ได้, ราคาแถม 0 ได้ |
+| Q5.2 | Track cost ผ่าน `serial.cost_price` ตอน approve |
+| Q5.3 | ไม่ทำ PDF Phase นี้ |
+| Q6 | RMA: strict UNIQUE(serial_id) — refactor partial unique ใน Phase ภายหลัง (clean migration) |
+
+### Pending (Phase 3.3 sub-phases)
+
+- ⏳ **3.3B.4** — SalesOrderFormPage (mirror QuotationFormPage + 6 new fields)
+- ⏳ **3.3B.5** — SalesOrderDetailPage (Modern card layout)
+- ⏳ **3.3B.6** — Attachments upload UI
+- ⏳ **3.3C** — Create SO from QT (one-click) + Free-text mapping dialog
+- ⏳ **3.3D** — Approve flow + Serial Picker Popup + Stock Cut + Cost Calc
+
 ## [Phase 3.2B.1 — Quotation PDF Export] — 2026-05-04
 
 ### Added

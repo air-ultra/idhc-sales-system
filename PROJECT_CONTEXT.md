@@ -1460,9 +1460,13 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 
 ---
 
-**Last Updated:** 2026-05-04 (Phase 3.2B.1 — Quotation PDF Export)
+**Last Updated:** 2026-05-04 (Phase 3.3A + 3.3B.1+2+3 — Sales Order DB + Backend + List Frontend)
 
 **Latest Commits:**
+- `7e39fd7` — feat(so): sidebar menu + routes + List page (Phase 3.3B.3)
+- `49f4f14` — feat(so): extra fields + attachments backend (Phase 3.3B.1+2)
+- `81e5c22` — feat(so): Sales Order CRUD endpoints (Phase 3.3A)
+- `e5f3405` — feat(so): DB schema for Sales Order module (Phase 3.3A)
 - `e2b3315` — feat(quotation): add 'พิมพ์ PDF' button in QuotationDetailPage (Phase 3.2B.1)
 - `4b7b5e2` — feat(quotation): add GET /:id/pdf endpoint (Phase 3.2B.1)
 - `4de4681` — feat(quotation): add WeasyPrint PDF generator (Phase 3.2B.1)
@@ -1483,10 +1487,15 @@ curl -s http://localhost:4000/api/purchase-orders -H "Authorization: Bearer $TOK
 - `c088ccf` — docs: update PROJECT_CONTEXT.md for Phase 2.7-B2
 
 **Pending commit:**
-- (none — ล่าสุด Phase 3.2B.1 PDF export + docs commit เรียบร้อย)
+- (none — ล่าสุด Phase 3.3B.3 list page + docs commit เรียบร้อย)
 
 **Pending features (รอทำต่อ):**
-- ⏳ Phase 3.2C: Email send — แนบ PDF ไปยัง customer email (next!)
+- ⏳ Phase 3.3B.4: SalesOrderFormPage — mirror QuotationFormPage + 6 new fields (next!)
+- ⏳ Phase 3.3B.5: SalesOrderDetailPage — Modern card layout
+- ⏳ Phase 3.3B.6: Attachments upload UI
+- ⏳ Phase 3.3C: Create SO from QT (one-click) + Free-text mapping dialog
+- ⏳ Phase 3.3D: Approve flow + Serial Picker Popup + Stock Cut + Cost Calc
+- ⏳ Phase 3.2C: Email send (skipped — ทำหลัง Phase 3.3 เสร็จ)
 - ⏳ Filter + pagination หน้า PO list (server-side)
 - ⏳ Hybrid form: อัพรูปได้ตอนเพิ่ม/แก้สินค้า — เก็บไว้พิจารณาภายหลัง
 - ⏳ Phase 3 ต่อ: Sales Order, Service Contract, Invoice, Payment
